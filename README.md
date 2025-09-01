@@ -10,3 +10,8 @@ The goal is to log habits, analyze streaks and trends, and eventually add smart 
 - Added first endpoint `/ping` → returns `{"message":"pong"}`.
 - Tested in browser, worked fine.
 
+### Day 1 — August 31, 2025
+- Mapped out core entities (`users`, `habits`, `events`, `contexts`) and their relationships.
+- Drafted CRUD + special endpoints (e.g., `PATCH /habits/{id}/pause`).
+- Split routes into `users.py`, `habits.py`, `events.py`, `contexts.py` and wired them into `main.py`.
+- Verified all endpoints respond with stub JSON via Swagger UI (`/docs`) — skeleton API is live.
