@@ -4,15 +4,21 @@ from __future__ import annotations
 # from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from typing import Optional
 from uuid import uuid4
-from datetime import datetime 
+from datetime import datetime, timezone
 from sqlalchemy import (
-    ForeignKey, Integer, Text, Enum, JSON, Date, CheckConstraint, Index, create_engine, String, DateTime, func
+    ForeignKey, Integer, Text, Enum, JSON, Date, CheckConstraint, Index, create_engine, String, DateTime, func,  TypeDecorator, event
 )
 from sqlalchemy.orm import relationship, DeclarativeBase, Mapped, mapped_column, sessionmaker
 from datetime import date  # alongside datetime
+from sqlalchemy.engine import Engine  # add this for the pragma listener
 
 # Engine: SQLite file ./app.db
 engine = create_engine("sqlite:///./app.db", future=True)
+
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 # Session factory and FastAPI dependency
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
@@ -27,8 +33,34 @@ def get_db():
         yield db
     finally:
         db.close()
+def utcnow() -> datetime:
+    # Always use aware UTC
+    return datetime.now(timezone.utc)
+
 
 # ORM base + one model to start
+class UTCDateTime(TypeDecorator):
+    """Store datetimes as UTC, return as timezone-aware UTC datetimes."""
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            # treat naive as UTC; if you prefer to reject naive, raise instead
+            value = value.replace(tzinfo=timezone.utc)
+        # normalize to UTC before storing
+        return value.astimezone(timezone.utc)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        # SQLite returns naive; attach UTC tz
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
 class Base(DeclarativeBase):
     pass
 
@@ -40,10 +72,9 @@ class UserORM(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String, nullable=False)
-    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     timezone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
 
     habits: Mapped[list["Habit"]] = relationship(
@@ -68,12 +99,10 @@ class Habit(Base):
     )
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 
     # relationships
     user: Mapped["UserORM"] = relationship(back_populates="habits")
@@ -92,13 +121,10 @@ class Event(Base):
     habit_id: Mapped[int] = mapped_column(
         ForeignKey("habits.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    occurred_at_utc: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
-    )
-    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    
+    occurred_at_utc: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
 
     habit: Mapped["Habit"] = relationship(back_populates="events")
 
@@ -113,12 +139,11 @@ class Context(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     kind: Mapped[str] = mapped_column(ContextKind, nullable=False, server_default="custom")
-    start_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    end_utc: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    metadata: Mapped[dict] = mapped_column(JSON, nullable=False, server_default="{}")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    start_utc: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
+    end_utc: Mapped[Optional[datetime]] = mapped_column(UTCDateTime(), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
 
     user: Mapped["UserORM"] = relationship(back_populates="contexts")
 
