@@ -77,14 +77,14 @@ class UserORM(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
 
-    habits: Mapped[list["Habit"]] = relationship(
+    habits: Mapped[list["HabitORM"]] = relationship(
     back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
-    contexts: Mapped[list["Context"]] = relationship(
+    contexts: Mapped[list["ContextORM"]] = relationship(
     back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
 
-class Habit(Base):
+class HabitORM(Base):
     __tablename__ = "habits"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -106,7 +106,7 @@ class Habit(Base):
 
     # relationships
     user: Mapped["UserORM"] = relationship(back_populates="habits")
-    events: Mapped[list["Event"]] = relationship(
+    events: Mapped[list["EventORM"]] = relationship(
         back_populates="habit", cascade="all, delete-orphan", passive_deletes=True
     )
 
@@ -114,7 +114,7 @@ class Habit(Base):
         CheckConstraint("difficulty >= 1 AND difficulty <= 5", name="ck_habits_difficulty_1_5"),
         Index("ix_habits_user_name_unique", "user_id", "name", unique=True),
     )
-class Event(Base):
+class EventORM(Base):
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -126,12 +126,12 @@ class Event(Base):
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
 
-    habit: Mapped["Habit"] = relationship(back_populates="events")
+    habit: Mapped["HabitORM"] = relationship(back_populates="events")
 
     __table_args__ = (
         Index("ix_events_habit_ts_unique", "habit_id", "occurred_at_utc", unique=True),
     )
-class Context(Base):
+class ContextORM(Base):
     __tablename__ = "contexts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

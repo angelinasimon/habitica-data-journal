@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.models import schemas
 from app.db import get_db
 from app import crud  # you’ll implement functions noted below
+from app.models.schemas import Streak
+from app.services.streaks import compute_streaks, NotFound
 
 router = APIRouter(prefix="/habits", tags=["habits"])
 
@@ -32,6 +34,15 @@ def list_user_habits(
 ):
     items = crud.habits.list_by_user(db, user_id, only_active=only_active, limit=limit, offset=offset)
     return items
+
+@router.get("/{habit_id}/streak", response_model=Streak)
+def get_habit_streak(habit_id: int, db: Session = Depends(get_db)):
+    try:
+        data = compute_streaks(db, habit_id, as_of=datetime.now(timezone.utc))
+        # Pydantic will coerce to the Streak model
+        return data
+    except NotFound:
+        raise HTTPException(status_code=404, detail="Habit not found")
 
 @router.put("/{habit_id}")
 def update_habit(habit_id: str):

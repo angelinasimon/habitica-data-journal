@@ -1,1 +1,1 @@
-from . import users, habits, events, contexts  # so you can `from app import crud` then `crud.habits.create(...)`
+from . import users, habits, events, context  # so you can `from app import crud` then `crud.habits.create(...)`

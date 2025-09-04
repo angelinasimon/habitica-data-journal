@@ -28,5 +28,6 @@ SQLAlchemy==2.0.43
 starlette==0.47.3
 typing-inspection==0.4.1
 typing_extensions==4.15.0
+tzdata>=2024.1
 urllib3==2.5.0
 uvicorn==0.35.0

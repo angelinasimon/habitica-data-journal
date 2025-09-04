@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pydantic import BaseModel, EmailStr, field_validator
 from pydantic import ConfigDict  # pydantic v2 style config
 from typing import Optional, Any, Dict
@@ -5,6 +6,13 @@ from datetime import datetime, date, timezone
 from uuid import UUID
 from enum import Enum
 from zoneinfo import ZoneInfo
+
+
+
+class Streak(BaseModel):
+    current: int
+    max: int
+    last_completed: date | None
 
 class UserCreate(BaseModel):
     name: str
