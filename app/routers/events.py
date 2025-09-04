@@ -1,10 +1,39 @@
-from fastapi import APIRouter
-router = APIRouter()
+from uuid import UUID
+from typing import List, Optional
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
-@router.post("")
-def create_event():
-    return {"ok": True, "route": "POST /events"}
+from app.models import schemas
+from app.db import get_db
+from app import crud
 
-@router.get("/{event_id}")
-def get_event(event_id: str):
-    return {"ok": True, "route": "GET /events/{id}", "event_id": event_id}
+router = APIRouter(prefix="/events", tags=["events"])
+
+@router.post("", response_model=schemas.EventRead, status_code=status.HTTP_201_CREATED)
+def log_event(payload: schemas.EventCreate, db: Session = Depends(get_db)):
+    # EventCreate validator already normalizes occurred_at to UTC
+    event = crud.events.create(db, payload)
+    if not event:
+        # e.g., habit_id doesn’t exist → your CRUD can return None
+        raise HTTPException(status_code=404, detail="Habit not found")
+    return event
+
+# List events for a habit in a date range (mounted here but path starts with /habits)
+@router.get("/habits/{habit_id}", response_model=List[schemas.EventRead])
+def list_habit_events(
+    habit_id: UUID,
+    db: Session = Depends(get_db),
+    start: Optional[datetime] = Query(None, description="Start (inclusive). If naive, treated as UTC."),
+    end: Optional[datetime] = Query(None, description="End (exclusive). If naive, treated as UTC."),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    # Normalize naive datetimes to UTC for storage consistency
+    def norm(dt: Optional[datetime]) -> Optional[datetime]:
+        if dt is None:
+            return None
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+    items = crud.events.list_for_habit(db, habit_id, start=norm(start), end=norm(end), limit=limit, offset=offset)
+    return items
