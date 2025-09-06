@@ -6,9 +6,11 @@ from typing import Optional
 from uuid import uuid4
 from datetime import datetime, timezone
 from sqlalchemy import (
-    ForeignKey, Integer, Text, Enum, JSON, Date, CheckConstraint, Index, create_engine, String, DateTime, func,  TypeDecorator, event
+    ForeignKey, Integer, Text,  Enum as SAEnum, JSON, Date, CheckConstraint, Index, create_engine, String, DateTime, func,  TypeDecorator, event
 )
+from enum import Enum 
 from sqlalchemy.orm import relationship, DeclarativeBase, Mapped, mapped_column, sessionmaker
+from app.models.schemas import Difficulty
 from datetime import date  # alongside datetime
 from sqlalchemy.engine import Engine  # add this for the pragma listener
 
@@ -87,49 +89,41 @@ class UserORM(Base):
 class HabitORM(Base):
     __tablename__ = "habits"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    difficulty: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
-    status: Mapped[str] = mapped_column(HabitStatus, nullable=False, server_default="active")
-    timezone: Mapped[str] = mapped_column(
-        String(64), nullable=False, server_default="America/Phoenix"
-    )
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # ... your other columns ...
 
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
-
-
-
-    # relationships
-    user: Mapped["UserORM"] = relationship(back_populates="habits")
-    events: Mapped[list["EventORM"]] = relationship(
-        back_populates="habit", cascade="all, delete-orphan", passive_deletes=True
+    difficulty: Mapped[Difficulty] = mapped_column(
+    SAEnum(Difficulty, name="difficulty_enum", native_enum=False, validate_strings=True),
+    nullable=False,
+    server_default=Difficulty.medium.value,
     )
 
+    status: Mapped[HabitStatus] = mapped_column(
+        SAEnum(HabitStatus, name="habit_status_enum", native_enum=False, validate_strings=True),
+        nullable=False,
+        server_default=HabitStatus.active.value,
+    )
+
+        # ... rest unchanged ...
     __table_args__ = (
-        CheckConstraint("difficulty >= 1 AND difficulty <= 5", name="ck_habits_difficulty_1_5"),
-        Index("ix_habits_user_name_unique", "user_id", "name", unique=True),
-    )
+            # make sure the old int CHECK constraint is gone here
+            Index("ix_habits_user_name_unique", "user_id", "name", unique=True),
+        )
 class EventORM(Base):
-    __tablename__ = "events"
+        __tablename__ = "events"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    habit_id: Mapped[int] = mapped_column(
-        ForeignKey("habits.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    
-    occurred_at_utc: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
-    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+        id: Mapped[int] = mapped_column(Integer, primary_key=True)
+        habit_id: Mapped[int] = mapped_column(
+            ForeignKey("habits.id", ondelete="CASCADE"), nullable=False, index=True
+        )
+        
+        occurred_at_utc: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
+        note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  
+        created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
 
-    habit: Mapped["HabitORM"] = relationship(back_populates="events")
+        habit: Mapped["HabitORM"] = relationship(back_populates="events")
 
-    __table_args__ = (
-        Index("ix_events_habit_ts_unique", "habit_id", "occurred_at_utc", unique=True),
+        __table_args__ = (
+            Index("ix_events_habit_ts_unique", "habit_id", "occurred_at_utc", unique=True),
     )
 class ContextORM(Base):
     __tablename__ = "contexts"

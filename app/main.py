@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from app.routers import users, habits, events, context
+from app.auth import router as auth_router
 # ⬇️ import these from your db setup
 from app.db import Base, engine
 
@@ -14,6 +15,8 @@ app.include_router(users.router,   prefix="/users",   tags=["users"])
 app.include_router(habits.router,  prefix="/habits",  tags=["habits"])
 app.include_router(events.router,  prefix="/events",  tags=["events"])
 app.include_router(context.router, prefix="/contexts", tags=["contexts"])
+app.include_router(auth_router)  
+
 
 @app.get("/ping")
 def ping():

@@ -4,6 +4,9 @@ from datetime import datetime, timedelta, timezone, date
 from zoneinfo import ZoneInfo
 from typing import Optional, Set, List
 from sqlalchemy.orm import Session
+from sqlalchemy import select
+from uuid import UUID
+
 
 # Adjust these imports to match your project:
 from app.db import UserORM, HabitORM, EventORM  # assumes you have EventORM.occurred_at (UTC), .habit_id
@@ -25,8 +28,7 @@ def _longest_run(sorted_dates: List[date]) -> int:
             run = 1
     return longest
 
-def _current_run(today: date, dates: Set[date]) -> int:
-    """Consecutive days ending at 'today' contained in dates."""
+def _current_run(today: date, dates: set[date]) -> int:
     run = 0
     d = today
     while d in dates:
@@ -34,60 +36,33 @@ def _current_run(today: date, dates: Set[date]) -> int:
         d -= timedelta(days=1)
     return run
 
-def compute_streaks(
-    db: Session,
-    habit_id: int,
-    as_of: Optional[datetime] = None,
-) -> dict:
-    """
-    Return {'current', 'max', 'last_completed'} for a habit.
-
-    All event times are stored in UTC (recommended). We translate to the habit's local
-    timezone to determine calendar days.
-    """
+def compute_streaks(db: Session, habit_id: UUID, *, user_id: UUID, as_of: datetime | None = None) -> dict:
     as_of = as_of or datetime.now(timezone.utc)
 
-    # 1) Get timezone for the habit (from the owning user, or a habit field if you have one).
-    row = (
-        db.query(HabitORM.id, UserORM.timezone)
-        .join(UserORM, HabitORM.user_id == UserORM.id)
-        .filter(HabitORM.id == habit_id)
-        .first()
-    )
-    if not row:
+    # Verify habit belongs to user and get tz
+    tzname = db.execute(
+        select(UserORM.timezone)
+        .join(HabitORM, HabitORM.user_id == UserORM.id)
+        .where(HabitORM.id == habit_id, HabitORM.user_id == user_id)
+    ).scalar_one_or_none()
+    if tzname is None:
         raise NotFound(f"Habit {habit_id} not found")
-    tz = ZoneInfo(row.timezone)
 
-    # 2) Pull events up to as_of (UTC).
-    #    Only fetch the one column you need for performance.
-    events = (
-        db.query(EventORM.occurred_at)
-        .filter(
-            EventORM.habit_id == habit_id,
-            EventORM.occurred_at <= as_of,
-        )
-        .order_by(EventORM.occurred_at.asc())
-        .all()
-    )
+    tz = ZoneInfo(tzname or "UTC")
 
-    # 3) Convert each event UTC -> local date and collapse duplicates.
-    local_dates = sorted({
-        ev.occurred_at.astimezone(tz).date()
-        for (ev,) in events  # ev is a row with one column
-    })
+    events = db.execute(
+        select(EventORM.occurred_at_utc)
+        .where(EventORM.habit_id == habit_id, EventORM.occurred_at_utc <= as_of)
+        .order_by(EventORM.occurred_at_utc.asc())
+    ).all()
 
+    local_dates = sorted({ row[0].astimezone(tz).date() for row in events })
     if not local_dates:
         return {"current": 0, "max": 0, "last_completed": None}
 
     dates_set = set(local_dates)
     today_local = as_of.astimezone(tz).date()
-
     current = _current_run(today_local, dates_set)
     max_run = _longest_run(local_dates)
-    last_completed = max(local_dates)
 
-    return {
-        "current": current,
-        "max": max_run,
-        "last_completed": last_completed,
-    }
+    return {"current": current, "max": max_run, "last_completed": local_dates[-1]}

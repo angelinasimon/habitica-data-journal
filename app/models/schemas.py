@@ -27,6 +27,9 @@ class User(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+# app/models/enums.py
+from enum import Enum  # Python's Enum
+
 class Difficulty(str, Enum):
     easy = "easy"
     medium = "medium"
@@ -38,31 +41,22 @@ class HabitStatus(str, Enum):
     archived = "archived"
 
 # You can keep Context kind as free text for now; add an Enum later if helpful.
+
 class HabitCreate(BaseModel):
     name: str
-    difficulty: Difficulty
-    timezone: str = "America/Phoenix"
-    start_date: Optional[date] = None
-
-    @field_validator("timezone")
-    @classmethod
-    def validate_timezone(cls, v: str) -> str:
-        try:
-            ZoneInfo(v)
-        except Exception:
-            raise ValueError("Invalid IANA timezone string")
-        return v
+    difficulty: Difficulty = Difficulty.medium
+    timezone: str
+    start_date: date | None = None
 
 class HabitRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: UUID
+    model_config = ConfigDict(from_attributes=True)  # Pydantic v2 "orm_mode"
+    id: int
     name: str
     difficulty: Difficulty
     timezone: str
+    start_date: date
     status: HabitStatus
-    start_date: Optional[date] = None
-    created_at: datetime
-    updated_at: datetime
+
 
 class HabitPatch(BaseModel):
     name: Optional[str] = None

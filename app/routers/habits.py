@@ -1,75 +1,67 @@
+# app/routers/habits.py
 from uuid import UUID
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Response
 from sqlalchemy.orm import Session
-
+from app.auth import get_current_user
 from app.models import schemas
-from app.db import get_db
-from app import crud  # you’ll implement functions noted below
 from app.models.schemas import Streak
+from app.db import get_db
+from app import crud
 from app.services.streaks import compute_streaks, NotFound
 
 router = APIRouter(prefix="/habits", tags=["habits"])
 
-@router.post("", response_model=schemas.HabitRead, status_code=status.HTTP_201_CREATED)
-def create_habit(payload: schemas.HabitCreate, db: Session = Depends(get_db)):
-    habit = crud.habits.create(db, payload)  # expects HabitCreate
-    return habit
+
+@router.post("/", response_model=schemas.HabitRead, status_code=status.HTTP_201_CREATED)
+def create_habit(payload: schemas.HabitCreate,
+                 db: Session = Depends(get_db),
+                 current_user = Depends(get_current_user)):
+    return crud.habits.create(db, payload, user_id=current_user.id)
 
 @router.get("/{habit_id}", response_model=schemas.HabitRead)
-def get_habit(habit_id: UUID, db: Session = Depends(get_db)):
-    habit = crud.habits.get(db, habit_id)
+def get_habit(habit_id: UUID, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)):
+    habit = crud.habits.get(db, habit_id=habit_id, user_id=current_user.id)
     if not habit:
-        raise HTTPException(status_code=404, detail="Habit not found")
+        raise HTTPException(404, "Habit not found")
     return habit
 
-# List a user’s habits (lives here for convenience, even though path starts with /users)
-@router.get("/users/{user_id}", response_model=List[schemas.HabitRead])
-def list_user_habits(
-    user_id: UUID,
+@router.get("/users/me", response_model=List[schemas.HabitRead])
+def list_my_habits(
     db: Session = Depends(get_db),
-    only_active: bool = Query(False, description="If true, return only active habits"),
+    current_user: schemas.User = Depends(get_current_user),
+    only_active: bool = Query(False),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    items = crud.habits.list_by_user(db, user_id, only_active=only_active, limit=limit, offset=offset)
-    return items
+    return crud.habits.list_by_user(db, user_id=current_user.id, only_active=only_active, limit=limit, offset=offset)
 
-@router.get("/{habit_id}/streak", response_model=Streak)
-def get_habit_streak(habit_id: int, db: Session = Depends(get_db)):
+@router.get("/{habit_id}/streak", response_model=schemas.Streak)
+def get_habit_streak(
+    habit_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user),
+    as_of: datetime | None = Query(None),
+):
+    if as_of and as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
     try:
-        data = compute_streaks(db, habit_id, as_of=datetime.now(timezone.utc))
-        # Pydantic will coerce to the Streak model
-        return data
+        return compute_streaks(db, habit_id, user_id=current_user.id, as_of=as_of)
     except NotFound:
-        raise HTTPException(status_code=404, detail="Habit not found")
-
-@router.put("/{habit_id}")
-def update_habit(habit_id: str):
-    return {"ok": True, "route": "PUT /habits/{id}", "habit_id": habit_id}
-
-@router.delete("/{habit_id}", status_code=204)
-def delete_habit(habit_id: str):
-    return
+        raise HTTPException(404, "Habit not found")
 
 @router.patch("/{habit_id}", response_model=schemas.HabitRead)
-def update_habit(habit_id: UUID, patch: schemas.HabitPatch, db: Session = Depends(get_db)):
-    update_data = patch.model_dump(exclude_unset=True, exclude_none=True)
-    if not update_data:
-        # nothing to do – you can return 200 with current state, or 400; 200 is friendlier
-        habit = crud.habits.get(db, habit_id)
-        if not habit:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Habit not found")
-        return habit
-
-    habit = crud.habits.update(db, habit_id, update_data)
+def patch_habit(habit_id: UUID, patch: schemas.HabitPatch, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)):
+    data = patch.model_dump(exclude_unset=True, exclude_none=True)
+    habit = crud.habits.update(db, habit_id=habit_id, user_id=current_user.id, data=data)
     if not habit:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Habit not found")
+        raise HTTPException(404, "Habit not found")
     return habit
 
-@router.patch("/{habit_id}/resume", response_model=schemas.HabitRead)
-def resume_habit(habit_id: UUID, db: Session = Depends(get_db)):
-    habit = crud.habits.set_status(db, habit_id, schemas.HabitStatus.active)
-    if not habit:
-        raise HTTPException(status_code=404, detail="Habit not found")
-    return habit
+@router.delete("/{habit_id}", status_code=204)
+def delete_habit(habit_id: UUID, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)):
+    ok = crud.habits.delete(db, habit_id=habit_id, user_id=current_user.id)
+    if not ok:
+        raise HTTPException(404, "Habit not found")
+    return
