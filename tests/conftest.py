@@ -5,14 +5,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone
 
 # Import your app + DB stuff
 from app.main import app
-from app.db import Base, get_db, UserORM, HabitORM, EventORM  # make sure these exist
+from app.db import (
+    Base, get_db,
+    UserORM, HabitORM, EventORM,
+    Difficulty, HabitStatus,  # <-- enums from your models/schemas integration
+)
 
-# --- Build a shared in-memory SQLite engine for the whole test run ---
-# StaticPool + "sqlite://" (no file) keeps one shared in-memory DB across threads.
+# --- Shared in-memory SQLite for the whole test run ---
 engine = create_engine(
     "sqlite://",
     connect_args={"check_same_thread": False},
@@ -27,18 +30,17 @@ def _create_schema():
     yield
     Base.metadata.drop_all(bind=engine)
 
-# --- Per-test DB session (rolled back/closed after each test) ---
+# --- Per-test DB session ---
 @pytest.fixture
 def db_session():
     db = TestingSessionLocal()
     try:
         yield db
     finally:
-        # in case the test forgot to commit
         db.rollback()
         db.close()
 
-# --- FastAPI client that uses the test DB via dependency override ---
+# --- FastAPI client using the test DB via dependency override ---
 @pytest.fixture
 def client(db_session):
     def override_get_db():
@@ -53,17 +55,15 @@ def client(db_session):
     app.dependency_overrides.clear()
 
 # --- Simple factories to insert rows quickly in tests ---
-# tests/conftest.py
 
 @pytest.fixture
 def user_factory(db_session):
     def make_user(
-        name="User",
-        email=None,
-        timezone_str="America/Phoenix",
-        **kwargs,                    # accept extra aliases
+        name: str = "User",
+        email: str | None = None,
+        timezone_str: str | None = "America/Phoenix",
+        **kwargs,  # allow calls like timezone="America/Phoenix"
     ):
-        # allow test calls like timezone="America/Phoenix"
         if "timezone" in kwargs and kwargs["timezone"] is not None:
             timezone_str = kwargs["timezone"]
 
@@ -75,30 +75,32 @@ def user_factory(db_session):
         return u
     return make_user
 
+def _to_enum(val, enum_cls):
+    if isinstance(val, enum_cls):
+        return val
+    return enum_cls(val)
+
 @pytest.fixture
 def habit_factory(db_session, user_factory):
     def make_habit(
-        user_id=None,
-        name="Habit",
-        start_date=None,
-        timezone_str="America/Phoenix",  # include if your model has a NOT NULL timezone
-        status="active",                 # include if NOT NULL with no server_default
-        difficulty="normal",             # include if NOT NULL with no server_default
+        user_id: str | None = None,
+        name: str = "Habit",
+        difficulty: Difficulty | str = Difficulty.medium,
+        status: HabitStatus | str = HabitStatus.active,
     ):
         if user_id is None:
             user_id = user_factory().id
-        if start_date is None:
-            start_date = date.today()  # or date in the user’s tz if you prefer
 
-        # Adjust kwargs to exactly match your HabitORM signature.
+        # Coerce strings to your enum types
+        difficulty = _to_enum(difficulty, Difficulty)
+        status = _to_enum(status, HabitStatus)
+
         h = HabitORM(
             user_id=user_id,
             name=name,
-            start_date=start_date,
-            # Only include these if your model defines them and they’re NOT NULL:
-            # timezone=timezone_str,
-            # status=status,
-            # difficulty=difficulty,
+            difficulty=difficulty,
+            name_canonical=name.strip().lower(),
+            status=status,
         )
         db_session.add(h)
         db_session.commit()
@@ -108,7 +110,7 @@ def habit_factory(db_session, user_factory):
 
 @pytest.fixture
 def event_factory(db_session):
-    def make_event(*, habit_id, occurred_at=None, occurred_at_utc=None):
+    def make_event(*, habit_id: int, occurred_at_utc: datetime | None = None, occurred_at: datetime | None = None):
         # prefer explicit UTC param; fall back to "occurred_at"
         ts = occurred_at_utc or occurred_at
         if ts is None:
@@ -120,14 +122,7 @@ def event_factory(db_session):
         else:
             ts = ts.astimezone(timezone.utc)
 
-        e = EventORM(habit_id=habit_id)
-        if hasattr(EventORM, "occurred_at_utc"):
-            e.occurred_at_utc = ts
-        elif hasattr(EventORM, "occurred_at"):
-            e.occurred_at = ts
-        else:
-            raise AssertionError("EventORM needs a datetime field named occurred_at_utc or occurred_at")
-
+        e = EventORM(habit_id=habit_id, occurred_at_utc=ts)
         db_session.add(e)
         db_session.commit()
         db_session.refresh(e)

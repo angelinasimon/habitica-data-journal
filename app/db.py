@@ -6,11 +6,11 @@ from typing import Optional
 from uuid import uuid4
 from datetime import datetime, timezone
 from sqlalchemy import (
-    ForeignKey, Integer, Text,  Enum as SAEnum, JSON, Date, CheckConstraint, Index, create_engine, String, DateTime, func,  TypeDecorator, event
+    ForeignKey, Integer, Text,  Enum as SAEnum, JSON, Date, CheckConstraint, Index, create_engine, String, DateTime, func,  TypeDecorator, event, UniqueConstraint
 )
 from enum import Enum 
 from sqlalchemy.orm import relationship, DeclarativeBase, Mapped, mapped_column, sessionmaker
-from app.models.schemas import Difficulty
+from app.models.schemas import Difficulty, HabitStatus
 from datetime import date  # alongside datetime
 from sqlalchemy.engine import Engine  # add this for the pragma listener
 
@@ -67,11 +67,12 @@ class Base(DeclarativeBase):
     pass
 
 
-HabitStatus = Enum("active", "paused", "archived", name="habit_status")
-ContextKind = Enum("travel", "exam", "illness", "custom", name="context_kind")
+# HabitStatus = Enum("HabitStatus", ["active", "paused", "archived"])
+ContextKind = Enum("ContextKind", ["travel", "exam", "illness", "custom"])
 
 class UserORM(Base):
     __tablename__ = "users"
+
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String, nullable=False)
     timezone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -80,71 +81,97 @@ class UserORM(Base):
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
 
     habits: Mapped[list["HabitORM"]] = relationship(
-    back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
     contexts: Mapped[list["ContextORM"]] = relationship(
-    back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
+
 
 class HabitORM(Base):
     __tablename__ = "habits"
 
-    # ... your other columns ...
+    # Needed so EventORM.habit_id (Integer) can FK to this
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # You indexed on user_id earlier; define it (User.id is String UUID)
+    user_id: Mapped[str] = mapped_column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    
+
+    # Display name as entered
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Canonical form for case-insensitive uniqueness (set in CRUD)
+    name_canonical: Mapped[str] = mapped_column(String(100), nullable=False)
 
     difficulty: Mapped[Difficulty] = mapped_column(
-    SAEnum(Difficulty, name="difficulty_enum", native_enum=False, validate_strings=True),
-    nullable=False,
-    server_default=Difficulty.medium.value,
+        SAEnum(Difficulty, name="difficulty_enum", native_enum=False, validate_strings=True),
+        nullable=False,
+        default=Difficulty.medium,          # python-side default
+        # server_default=Difficulty.medium.value,  # optional; ok if you want DB default
     )
 
     status: Mapped[HabitStatus] = mapped_column(
         SAEnum(HabitStatus, name="habit_status_enum", native_enum=False, validate_strings=True),
         nullable=False,
-        server_default=HabitStatus.active.value,
+        default=HabitStatus.active,         # python-side default
+        # server_default=HabitStatus.active.value, # optional
     )
 
-        # ... rest unchanged ...
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+
+    user: Mapped["UserORM"] = relationship(back_populates="habits")
+    events: Mapped[list["EventORM"]] = relationship(
+        back_populates="habit", cascade="all, delete-orphan", passive_deletes=True
+    )
+
     __table_args__ = (
-            # make sure the old int CHECK constraint is gone here
-            Index("ix_habits_user_name_unique", "user_id", "name", unique=True),
-        )
+        # Replace the broken index with a robust per-user uniqueness rule
+        UniqueConstraint("user_id", "name_canonical", name="uq_habits_user_namecanon"),
+        # Helpful for queries like: “all active habits for a user”
+        Index("ix_habits_user_status", "user_id", "status"),
+    )
 class EventORM(Base):
-        __tablename__ = "events"
+    __tablename__ = "events"
 
-        id: Mapped[int] = mapped_column(Integer, primary_key=True)
-        habit_id: Mapped[int] = mapped_column(
-            ForeignKey("habits.id", ondelete="CASCADE"), nullable=False, index=True
-        )
-        
-        occurred_at_utc: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
-        note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  
-        created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    habit_id: Mapped[int] = mapped_column(
+        ForeignKey("habits.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
-        habit: Mapped["HabitORM"] = relationship(back_populates="events")
+    occurred_at_utc: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
 
-        __table_args__ = (
-            Index("ix_events_habit_ts_unique", "habit_id", "occurred_at_utc", unique=True),
+    habit: Mapped["HabitORM"] = relationship(back_populates="events")
+
+    __table_args__ = (
+        Index("ix_events_habit_ts_unique", "habit_id", "occurred_at_utc", unique=True),
     )
 class ContextORM(Base):
     __tablename__ = "contexts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    kind: Mapped[str] = mapped_column(ContextKind, nullable=False, server_default="custom")
+
+    # Use SAEnum here (your original used the class directly)
+    kind: Mapped[ContextKind] = mapped_column(
+        SAEnum(ContextKind, name="context_kind_enum", native_enum=False, validate_strings=True),
+        nullable=False,
+        default=ContextKind.custom,
+    )
+
     start_utc: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
     end_utc: Mapped[Optional[datetime]] = mapped_column(UTCDateTime(), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
     data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
-
     user: Mapped["UserORM"] = relationship(back_populates="contexts")
 
     __table_args__ = (
-        CheckConstraint(
-            "(end_utc IS NULL) OR (end_utc > start_utc)",
-            name="ck_contexts_end_after_start",
-        ),
+        CheckConstraint("(end_utc IS NULL) OR (end_utc > start_utc)", name="ck_contexts_end_after_start"),
         Index("ix_contexts_user_window", "user_id", "start_utc", "end_utc"),
     )

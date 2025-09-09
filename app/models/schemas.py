@@ -40,44 +40,29 @@ class HabitStatus(str, Enum):
     paused = "paused"
     archived = "archived"
 
+
+
+
 # You can keep Context kind as free text for now; add an Enum later if helpful.
 
 class HabitCreate(BaseModel):
     name: str
     difficulty: Difficulty = Difficulty.medium
-    timezone: str
-    start_date: date | None = None
+    status: HabitStatus = HabitStatus.active
+    timezone: Optional[str] = None
+    start_date: Optional[date] = None
 
 class HabitRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)  # Pydantic v2 "orm_mode"
+    model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
     difficulty: Difficulty
-    timezone: str
-    start_date: date
     status: HabitStatus
-
 
 class HabitPatch(BaseModel):
     name: Optional[str] = None
     difficulty: Optional[Difficulty] = None
-    timezone: Optional[str] = None
     status: Optional[HabitStatus] = None
-
-    @field_validator("timezone")
-    @classmethod
-    def validate_timezone_optional(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        try:
-            ZoneInfo(v)
-        except Exception:
-            raise ValueError("Invalid IANA timezone string")
-        return v
-
-    def as_update_dict(self) -> dict:
-        # Use this in your CRUD layer to build partial updates safely.
-        return self.model_dump(exclude_unset=True, exclude_none=True)
 
 # ---------- Event Schemas ----------
 class EventCreate(BaseModel):
@@ -123,3 +108,9 @@ class ContextRead(BaseModel):
     data: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
+
+class ContextKind(str, Enum):
+    travel = "travel"
+    exam = "exam"
+    illness = "illness"
+    custom = "custom"
