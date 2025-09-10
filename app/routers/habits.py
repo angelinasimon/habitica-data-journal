@@ -79,3 +79,14 @@ def delete_habit(
     if not ok:
         raise HTTPException(404, "Habit not found")
     return
+@router.post("/{habit_id}/pause", response_model=schemas.HabitRead)
+def pause_habit(habit_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    h = crud.habits.get(db, habit_id=habit_id, user_id=current_user.id)
+    if not h: raise HTTPException(404, "Habit not found")
+    return crud.habits.update(db, habit_id=habit_id, user_id=current_user.id, data={"status": "paused"})
+
+@router.post("/{habit_id}/resume", response_model=schemas.HabitRead)
+def resume_habit(habit_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    h = crud.habits.get(db, habit_id=habit_id, user_id=current_user.id)
+    if not h: raise HTTPException(404, "Habit not found")
+    return crud.habits.update(db, habit_id=habit_id, user_id=current_user.id, data={"status": "active"})

@@ -108,3 +108,31 @@ def test_get_streak_no_events(client, db_session):
     assert data["last_completed"] is None
 
     _remove_user_override()
+
+def test_pause_and_resume_habit(client, db_session):
+    user = _install_user_override(client, db_session)
+
+    # Create habit (starts active)
+    h = client.post("/habits/", json={"name": "PauseTest"}).json()
+    assert h["status"] == "active"
+
+    # Pause
+    r1 = client.post(f"/habits/{h['id']}/pause")
+    assert r1.status_code == 200, r1.text
+    body1 = r1.json()
+    assert body1["status"] == "paused"
+
+    # Resume
+    r2 = client.post(f"/habits/{h['id']}/resume")
+    assert r2.status_code == 200, r2.text
+    body2 = r2.json()
+    assert body2["status"] == "active"
+
+    _remove_user_override()
+
+
+def test_pause_nonexistent_habit_404(client, db_session):
+    _install_user_override(client, db_session)
+    r = client.post("/habits/999999/pause")
+    assert r.status_code == 404
+    _remove_user_override()
