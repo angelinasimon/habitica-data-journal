@@ -18,6 +18,21 @@ def create_habit(
     current_user: schemas.User = Depends(get_current_user)
 ):
     return crud.habits.create(db, payload, user_id=current_user.id)
+# app/routers/habits.py
+@router.post("/{habit_id}/pause", response_model=schemas.HabitRead)
+def pause_habit(habit_id: int, db: Session = Depends(get_db)):
+    h = crud.habits.set_status(db, habit_id, schemas.HabitStatus.paused)
+    if not h:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return h
+
+@router.post("/{habit_id}/resume", response_model=schemas.HabitRead)
+def resume_habit(habit_id: int, db: Session = Depends(get_db)):
+    h = crud.habits.set_status(db, habit_id, schemas.HabitStatus.active)
+    if not h:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return h
+
 
 @router.get("/{habit_id}", response_model=schemas.HabitRead)
 def get_habit(

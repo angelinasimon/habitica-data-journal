@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Optional
 from uuid import uuid4
 from datetime import datetime, timezone
-from sqlalchemy import (
+from sqlalchemy import ( 
     ForeignKey, Integer, Text,  Enum as SAEnum, JSON, Date, CheckConstraint, Index, create_engine, String, DateTime, func,  TypeDecorator, event, UniqueConstraint
 )
 from enum import Enum 
 from sqlalchemy.orm import relationship, DeclarativeBase, Mapped, mapped_column, sessionmaker
-from app.models.schemas import Difficulty, HabitStatus
+from app.models.schemas import Difficulty, HabitStatus, ContextKind
 from datetime import date  # alongside datetime
 from sqlalchemy.engine import Engine  # add this for the pragma listener
 
@@ -68,7 +68,7 @@ class Base(DeclarativeBase):
 
 
 # HabitStatus = Enum("HabitStatus", ["active", "paused", "archived"])
-ContextKind = Enum("ContextKind", ["travel", "exam", "illness", "custom"])
+#ContextKind = Enum("ContextKind", ["travel", "exam", "illness", "custom"])
 
 class UserORM(Base):
     __tablename__ = "users"
@@ -166,7 +166,9 @@ class ContextORM(Base):
 
     start_utc: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
     end_utc: Mapped[Optional[datetime]] = mapped_column(UTCDateTime(), nullable=True, index=True)
+   
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
     data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     user: Mapped["UserORM"] = relationship(back_populates="contexts")

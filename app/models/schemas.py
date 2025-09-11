@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, EmailStr, field_validator
-from pydantic import ConfigDict  # pydantic v2 style config
+from pydantic import ConfigDict, Field  # pydantic v2 style config
 from typing import Optional, Any, Dict
 from datetime import datetime, date, timezone
 from uuid import UUID
@@ -62,26 +62,45 @@ class HabitRead(BaseModel):
 class HabitPatch(BaseModel):
     name: Optional[str] = None
     difficulty: Optional[Difficulty] = None
+    timezone: Optional[str] = None
     status: Optional[HabitStatus] = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone_optional(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            ZoneInfo(v)
+        except Exception:
+            raise ValueError("Invalid IANA timezone string")
+        return v
+    
+class ContextKind(str, Enum):
+    travel = "travel"
+    exam = "exam"
+    illness = "illness"
+    custom = "custom"
 
 # ---------- Event Schemas ----------
 class EventCreate(BaseModel):
-    habit_id: UUID
-    occurred_at: datetime  # client sends ISO 8601 (e.g., "2025-09-03T15:00:00-07:00")
+    # was UUID — make it int to match your Habit/Event PKs in tests/DB
+    habit_id: int
+    occurred_at: datetime
 
     @field_validator("occurred_at")
     @classmethod
     def default_to_utc(cls, v: datetime) -> datetime:
-        # Store everything in UTC for consistency
         if v.tzinfo is None:
             return v.replace(tzinfo=timezone.utc)
         return v.astimezone(timezone.utc)
 
+
 class EventRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: UUID
-    habit_id: UUID
-    occurred_at: datetime  # UTC
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    id: int
+    habit_id: int
+    occurred_at: datetime = Field(alias="occurred_at_utc")
     created_at: datetime
 
 # ---------- Context Schemas ----------
@@ -89,28 +108,23 @@ class ContextCreate(BaseModel):
     kind: str
     start: datetime
     end: Optional[datetime] = None
-    metadata: Optional[Dict[str, Any]] = None
+    data: Dict[str, Any] = Field(default_factory=dict)   # rename from metadata
 
     @field_validator("start", "end")
     @classmethod
     def ensure_tz(cls, v: Optional[datetime]) -> Optional[datetime]:
         if v is None:
             return v
-        # If naive, assume UTC; if aware, leave as-is (you can also normalize to UTC here).
         return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
-
+    
 class ContextRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: UUID
-    kind: str
-    start: datetime
-    end: Optional[datetime] = None
-    data: Optional[Dict[str, Any]] = None
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: int                                # ← ORM uses int PK
+    kind: ContextKind
+    start: datetime = Field(alias="start_utc")
+    end: Optional[datetime] = Field(alias="end_utc")
+    data: Dict[str, Any] = Field(default_factory=dict)   # renamed   # ← if your ORM column is called "data"
     created_at: datetime
     updated_at: datetime
 
-class ContextKind(str, Enum):
-    travel = "travel"
-    exam = "exam"
-    illness = "illness"
-    custom = "custom"

@@ -10,6 +10,8 @@ from app import crud
 
 router = APIRouter(prefix="/events", tags=["events"])
 
+
+
 @router.post("", response_model=schemas.EventRead, status_code=status.HTTP_201_CREATED)
 def log_event(payload: schemas.EventCreate, db: Session = Depends(get_db)):
     # EventCreate validator already normalizes occurred_at to UTC
@@ -22,7 +24,7 @@ def log_event(payload: schemas.EventCreate, db: Session = Depends(get_db)):
 # List events for a habit in a date range (mounted here but path starts with /habits)
 @router.get("/habits/{habit_id}", response_model=List[schemas.EventRead])
 def list_habit_events(
-    habit_id: UUID,
+    habit_id: int,
     db: Session = Depends(get_db),
     start: Optional[datetime] = Query(None, description="Start (inclusive). If naive, treated as UTC."),
     end: Optional[datetime] = Query(None, description="End (exclusive). If naive, treated as UTC."),

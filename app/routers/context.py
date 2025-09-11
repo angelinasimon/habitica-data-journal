@@ -6,22 +6,25 @@ from sqlalchemy.orm import Session
 from app.models import schemas
 from app.db import get_db
 from app import crud
+from app.auth import get_current_user   # make sure this import exists
+
 
 router = APIRouter(prefix="/contexts", tags=["contexts"])
 
 @router.post("", response_model=schemas.ContextRead, status_code=status.HTTP_201_CREATED)
-def create_context(payload: schemas.ContextCreate, db: Session = Depends(get_db)):
-    ctx = crud.contexts.create(db, payload)
-    return ctx
-
-# List contexts for a user with optional active_only filter (mounted here; path begins /users)
-@router.get("/users/{user_id}", response_model=List[schemas.ContextRead])
-def list_user_contexts(
-    user_id: UUID,
+def create_context(
+    payload: schemas.ContextCreate,
     db: Session = Depends(get_db),
-    active_only: bool = Query(False, description="Only contexts whose window includes 'now'"),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    current_user = Depends(get_current_user),
 ):
-    items = crud.contexts.list_for_user(db, user_id, active_only=active_only, limit=limit, offset=offset)
-    return items
+    return crud.context.create_context(db, user_id=current_user.id, payload=payload)
+
+# Replace the old users/{user_id} route with a "me" lister that matches tests
+@router.get("", response_model=List[schemas.ContextRead])
+def list_my_contexts(
+    active_only: bool = Query(False, description="Only contexts whose window includes 'now'"),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    return crud.context.list_user_contexts(db, user_id=current_user.id, active_only=active_only)
+    return crud.context.list_contexts(db, user_id=user_id, active_only=active_only)

@@ -2,7 +2,7 @@
 import uuid
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from datetime import datetime, timezone
@@ -12,8 +12,24 @@ from app.main import app
 from app.db import (
     Base, get_db,
     UserORM, HabitORM, EventORM,
-    Difficulty, HabitStatus,  # <-- enums from your models/schemas integration
+      # <-- enums from your models/schemas integration
 )
+from app.models.schemas import Difficulty, HabitStatus 
+
+
+from app.auth import get_current_user  # or wherever it's defined
+
+@pytest.fixture
+def user_override(db_session, user_factory):
+    def _override(user=None):
+        if user is None:
+            user = user_factory()
+        def _get_current_user_override():
+            return user
+        app.dependency_overrides[get_current_user] = _get_current_user_override
+        return user
+    yield _override
+    app.dependency_overrides.pop(get_current_user, None)
 
 # --- Shared in-memory SQLite for the whole test run ---
 engine = create_engine(
@@ -128,3 +144,20 @@ def event_factory(db_session):
         db_session.refresh(e)
         return e
     return make_event
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+@pytest.fixture
+def client(db_session):
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()  # keeps things clean even if a test forgot to remove overrides
+
