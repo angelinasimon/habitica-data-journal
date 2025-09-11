@@ -4,58 +4,51 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from fastapi import HTTPException, status
 
 from app.db import EventORM, HabitORM
-from app.models.schemas import HabitStatus, EventCreate
+from app.models.schemas import HabitStatus
 
-def _local_day_bounds_utc(when_utc: datetime, tz_name: str) -> tuple[datetime, datetime]:
-    """Given a UTC timestamp and an IANA tz, return the UTC bounds of that local day."""
-    tz = ZoneInfo(tz_name)
-    local = when_utc.astimezone(tz)
-    start_local = datetime.combine(local.date(), time(0, 0), tzinfo=tz)
-    end_local = start_local + timedelta(days=1)
-    return (
-        start_local.astimezone(timezone.utc),
-        end_local.astimezone(timezone.utc),
-    )
-
-def create(db: Session, payload: EventCreate) -> EventORM:
-    """Create one completion with 'one-per-local-day' idempotency in user's timezone."""
-    habit = db.get(HabitORM, payload.habit_id)
+def create(
+    db: Session,
+    *,
+    habit_id: int,
+    occurred_at: datetime,
+    user_tz: str
+) -> EventORM:
+    """
+    Insert an event only if another event for this habit on the same *local* day
+    doesn't already exist. Works on SQLite & Postgres.
+    """
+    # ✅ Check habit exists and isn’t paused
+    habit = db.get(HabitORM, habit_id)
     if not habit:
         raise HTTPException(status_code=404, detail="Habit not found")
-
-    # Policy: paused habits reject completions
     if habit.status == HabitStatus.paused:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Habit is paused")
-
-    # Payload.occurred_at is already UTC (validator). Compute the local-day window.
-    tz_name = habit.user.timezone or "UTC"
-    start_utc, end_utc = _local_day_bounds_utc(payload.occurred_at, tz_name)
-
-    # One-per-local-day soft guard (idempotent)
-    existing = (
-        db.query(EventORM)
-        .filter(
-            and_(
-                EventORM.habit_id == habit.id,
-                EventORM.occurred_at_utc >= start_utc,
-                EventORM.occurred_at_utc < end_utc,
-            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Habit is paused; events not allowed",
         )
-        .first()
-    )
-    if existing:
-        return existing
 
-    # Create the event (store UTC)
-    e = EventORM(habit_id=habit.id, occurred_at_utc=payload.occurred_at)
-    db.add(e)
+    # Always store UTC
+    occurred_utc = occurred_at.astimezone(timezone.utc)
+
+    # Determine the user’s local date for idempotence
+    tz = ZoneInfo(user_tz)
+    local_date = occurred_utc.astimezone(tz).date()
+
+    # Fetch all events for that habit and compare local dates in Python
+    for ev in db.query(EventORM).filter(EventORM.habit_id == habit_id).all():
+        if ev.occurred_at_utc.astimezone(tz).date() == local_date:
+            return ev  # already have one for that local calendar day
+
+    ev = EventORM(habit_id=habit_id, occurred_at_utc=occurred_utc)
+    db.add(ev)
     db.commit()
-    db.refresh(e)
-    return e
+    db.refresh(ev)
+    return ev
+
 
 def list_for_habit(
     db: Session,
@@ -66,6 +59,9 @@ def list_for_habit(
     limit: int = 100,
     offset: int = 0,
 ) -> List[EventORM]:
+    """
+    Simple range query in pure UTC.
+    """
     stmt = select(EventORM).where(EventORM.habit_id == habit_id)
     if start is not None:
         stmt = stmt.where(EventORM.occurred_at_utc >= start)

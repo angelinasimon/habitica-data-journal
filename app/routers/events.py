@@ -5,21 +5,27 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.models import schemas
-from app.db import get_db
+from app.db import get_db, HabitORM
+from app.auth import get_current_user
 from app import crud
 
 router = APIRouter(prefix="/events", tags=["events"])
 
 
 
-@router.post("", response_model=schemas.EventRead, status_code=status.HTTP_201_CREATED)
-def log_event(payload: schemas.EventCreate, db: Session = Depends(get_db)):
-    # EventCreate validator already normalizes occurred_at to UTC
-    event = crud.events.create(db, payload)
-    if not event:
-        # e.g., habit_id doesn’t exist → your CRUD can return None
+@router.post("", response_model=schemas.EventRead, status_code=201)
+def log_event(payload: schemas.EventCreate,
+              db: Session = Depends(get_db),
+              current_user=Depends(get_current_user)):
+    habit = db.get(HabitORM, payload.habit_id)
+    if not habit:
         raise HTTPException(status_code=404, detail="Habit not found")
-    return event
+    return crud.events.create(
+        db,
+        habit_id=payload.habit_id,
+        occurred_at=payload.occurred_at,
+        user_tz=habit.user.timezone or "UTC",
+    )
 
 # List events for a habit in a date range (mounted here but path starts with /habits)
 @router.get("/habits/{habit_id}", response_model=List[schemas.EventRead])

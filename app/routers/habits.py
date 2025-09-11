@@ -7,7 +7,7 @@ from app.auth import get_current_user
 from app.models import schemas
 from app.db import get_db
 from app import crud
-from app.services.streaks import compute_streaks, NotFound
+from app.services.streaks import compute_streaks , NotFound
 
 router = APIRouter(prefix="/habits", tags=["habits"])
 
@@ -20,17 +20,35 @@ def create_habit(
     return crud.habits.create(db, payload, user_id=current_user.id)
 # app/routers/habits.py
 @router.post("/{habit_id}/pause", response_model=schemas.HabitRead)
-def pause_habit(habit_id: int, db: Session = Depends(get_db)):
-    h = crud.habits.set_status(db, habit_id, schemas.HabitStatus.paused)
+def pause_habit(
+    habit_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    h = crud.habits.update(
+        db,
+        habit_id=habit_id,
+        user_id=current_user.id,
+        data={"status": schemas.HabitStatus.paused},
+    )
     if not h:
-        raise HTTPException(status_code=404, detail="Not Found")
+        raise HTTPException(status_code=404, detail="Habit not found")
     return h
 
 @router.post("/{habit_id}/resume", response_model=schemas.HabitRead)
-def resume_habit(habit_id: int, db: Session = Depends(get_db)):
-    h = crud.habits.set_status(db, habit_id, schemas.HabitStatus.active)
+def resume_habit(
+    habit_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    h = crud.habits.update(
+        db,
+        habit_id=habit_id,
+        user_id=current_user.id,
+        data={"status": schemas.HabitStatus.active},
+    )
     if not h:
-        raise HTTPException(status_code=404, detail="Not Found")
+        raise HTTPException(status_code=404, detail="Habit not found")
     return h
 
 
@@ -59,17 +77,14 @@ def list_my_habits(
 
 @router.get("/{habit_id}/streak", response_model=schemas.Streak)
 def get_habit_streak(
-    habit_id: int,  # <-- int
+    habit_id: int,
     db: Session = Depends(get_db),
     current_user: schemas.User = Depends(get_current_user),
     as_of: datetime | None = Query(None),
 ):
     if as_of and as_of.tzinfo is None:
         as_of = as_of.replace(tzinfo=timezone.utc)
-    try:
-        return compute_streaks(db, habit_id, user_id=current_user.id, as_of=as_of)
-    except NotFound:
-        raise HTTPException(404, "Habit not found")
+    return compute_streaks(db, habit_id, user_id=current_user.id, as_of=as_of)
 
 @router.patch("/{habit_id}", response_model=schemas.HabitRead)
 def patch_habit(
