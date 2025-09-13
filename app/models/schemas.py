@@ -46,6 +46,7 @@ class HabitStatus(str, Enum):
 # You can keep Context kind as free text for now; add an Enum later if helpful.
 
 class HabitCreate(BaseModel):
+    user_id: UUID | None = None 
     name: str
     difficulty: Difficulty = Difficulty.medium
     status: HabitStatus = HabitStatus.active
@@ -127,4 +128,8 @@ class ContextRead(BaseModel):
     data: Dict[str, Any] = Field(default_factory=dict)   # renamed   # ← if your ORM column is called "data"
     created_at: datetime
     updated_at: datetime
+
+class ReminderDue(BaseModel):
+    habit_id: int
+    habit_name: str
 

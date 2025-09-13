@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db import get_db, UserORM
+from typing import Optional
 
 router = APIRouter(prefix="/auth", tags=["auth"])  # ← this is what main.py imports
 
@@ -14,3 +15,9 @@ def get_current_user(db: Session = Depends(get_db)) -> UserORM:
 @router.get("/me")
 def read_me(current_user: UserORM = Depends(get_current_user)):
     return {"id": str(current_user.id), "email": getattr(current_user, "email", None)}
+
+def get_current_user_optional() -> Optional[UserORM]:
+    try:
+        return get_current_user()
+    except Exception:
+        return None

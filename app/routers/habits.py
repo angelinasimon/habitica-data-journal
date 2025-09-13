@@ -7,7 +7,7 @@ from app.auth import get_current_user
 from app.models import schemas
 from app.db import get_db
 from app import crud
-from app.services.streaks import compute_streaks , NotFound
+from app.services.streaks import compute_streaks, NotFound
 
 router = APIRouter(prefix="/habits", tags=["habits"])
 
@@ -77,14 +77,17 @@ def list_my_habits(
 
 @router.get("/{habit_id}/streak", response_model=schemas.Streak)
 def get_habit_streak(
-    habit_id: int,
+    habit_id: int,  # <-- int
     db: Session = Depends(get_db),
     current_user: schemas.User = Depends(get_current_user),
     as_of: datetime | None = Query(None),
 ):
     if as_of and as_of.tzinfo is None:
         as_of = as_of.replace(tzinfo=timezone.utc)
-    return compute_streaks(db, habit_id, user_id=current_user.id, as_of=as_of)
+    try:
+        return compute_streaks(db, habit_id, user_id=current_user.id, as_of=as_of)
+    except NotFound:
+        raise HTTPException(404, "Habit not found")
 
 @router.patch("/{habit_id}", response_model=schemas.HabitRead)
 def patch_habit(

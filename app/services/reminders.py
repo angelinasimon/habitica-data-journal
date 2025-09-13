@@ -1,28 +1,21 @@
-# app/services/reminders.py
-import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import select
-
-# Adjust these imports to your project:
-# - If your ORM models live in app.db, import from there
-# - Or if you have app.models.orm, import from there
-from app.db import UserORM, HabitORM, EventORM, ContextORM  # <-- adjust if needed
-
-logger = logging.getLogger("reminders")
+from app.db import UserORM, HabitORM, EventORM, ContextORM
+# If you have an Enum for status, import it:
+try:
+    from app.db import HabitStatus  # adjust if it lives elsewhere
+except Exception:
+    HabitStatus = None
 
 def _local_day_bounds(as_of_utc: datetime, tz: ZoneInfo):
-    """Return the start/end of that user's local day, expressed back in UTC."""
     local = as_of_utc.astimezone(tz)
     start_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
     end_local   = local.replace(hour=23, minute=59, second=59, microsecond=999_999)
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 def _has_active_context(db, user_id, day_start_utc: datetime, day_end_utc: datetime) -> bool:
-    """
-    Minimal policy: any context overlapping the local day suppresses reminders.
-    Later you can refine (e.g., only suppress certain habit kinds).
-    """
+    # ✅ compare using the raw user_id value (let SQLAlchemy handle types)
     q = (
         select(ContextORM.id)
         .where(
@@ -34,57 +27,75 @@ def _has_active_context(db, user_id, day_start_utc: datetime, day_end_utc: datet
     )
     return db.execute(q).first() is not None
 
-def get_due_habits(db, as_of_utc: datetime):
-    """
-    Returns a list of (user_id, habit_id, habit_name) that are due today
-    per each user's local day, have no event today, and are not paused/hidden.
-    """
+def _is_active(status_value) -> bool:
+    # ✅ handle both Enum and string storage
+    if HabitStatus and isinstance(status_value, HabitStatus):
+        return status_value == HabitStatus.active
+    # strings like "active", "ACTIVE", etc.
+    return str(status_value).lower() == "active"
+
+def get_due_habits(db, user: UserORM, as_of_utc: datetime):
+    tz = ZoneInfo(user.timezone or "UTC")
+    day_start_utc, day_end_utc = _local_day_bounds(as_of_utc, tz)
+
+    if _has_active_context(db, user.id, day_start_utc, day_end_utc):
+        return []
+
+    # ✅ no string casts; let SA bind the correct type for user.id
+    habits = db.execute(
+    select(HabitORM.id, HabitORM.name, HabitORM.status)
+    .where(HabitORM.user_id == str(user.id))
+    ).all()
+
+    suppressed = db.execute(
+        select(ContextORM.id)
+        .where(
+            ContextORM.user_id == str(user.id),
+            ContextORM.start_utc <= day_end_utc,
+            ContextORM.end_utc >= day_start_utc,
+        )
+        .limit(1)
+    ).first() is not None
+
     due = []
+    for hid, hname, status in habits:
+        if not _is_active(status):
+            continue
 
-    # Fetch all users with their timezones (you can paginate if large)
-    users = db.execute(select(UserORM.id, UserORM.timezone)).all()
+        has_event = db.execute(
+            select(EventORM.id)
+            .where(
+                EventORM.habit_id == hid,
+                # ✅ use the same timestamp column your Event writer uses:
+                EventORM.occurred_at_utc >= day_start_utc,
+                EventORM.occurred_at_utc <= day_end_utc,
+            )
+            .limit(1)
+        ).first() is not None
 
-    for user_id, tzname in users:
-        tz = ZoneInfo(tzname or "UTC")
-        day_start_utc, day_end_utc = _local_day_bounds(as_of_utc, tz)
-
-        # Decide if any active context suppresses reminders today
-        suppress_all = _has_active_context(db, user_id, day_start_utc, day_end_utc)
-
-        # Active, non-paused habits
-        habits = db.execute(
-            select(HabitORM.id, HabitORM.name, HabitORM.status)
-            .where(HabitORM.user_id == user_id)
-        ).all()
-
-        for hid, hname, status in habits:
-            if status != "active":
-                continue
-            if suppress_all:
-                continue
-
-            # Any event for this habit in the user's local day?
-            event_exists = db.execute(
-                select(EventORM.id)
-                .where(
-                    EventORM.habit_id == hid,
-                    EventORM.occurred_at_utc >= day_start_utc,
-                    EventORM.occurred_at_utc <= day_end_utc,
-                )
-                .limit(1)
-            ).first() is not None
-
-            if not event_exists:
-                due.append((user_id, hid, hname))
+        if not has_event:
+            due.append((hid, hname))
     return due
 
 def run_reminder_cycle(db, as_of_utc: datetime) -> int:
     """
-    One full pass: compute dues and log them (hook for future email/push).
-    Returns how many due items were found (for metrics/tests).
+    One full pass: for each user, compute due habits and log them.
+    Returns the total number of due items found.
     """
-    items = get_due_habits(db, as_of_utc)
-    for user_id, habit_id, name in items:
-        logger.info("[Reminder] User %s: %s due today", user_id, name)
-        # TODO: enqueue push/email/OS notifications here
-    return len(items)
+    # If not already declared at top of file:
+    # import logging
+    # logger = logging.getLogger("scheduler")
+
+    total = 0
+
+    # Fetch all users once (lets SQLAlchemy bind the correct PK type)
+    users = db.execute(select(UserORM)).scalars().all()
+
+    for user in users:
+        # Your helper returns a list of (habit_id, habit_name) for THIS user
+        due = get_due_habits(db, user, as_of_utc)
+        for habit_id, habit_name in due:
+            logger.info("[Reminder] User %s: %s due today", user.id, habit_name)
+            total += 1
+
+    return total

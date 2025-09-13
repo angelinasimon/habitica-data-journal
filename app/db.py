@@ -15,9 +15,10 @@ from datetime import date  # alongside datetime
 from sqlalchemy.engine import Engine  # add this for the pragma listener
 
 # Engine: SQLite file ./app.db
-engine = create_engine("sqlite:///./app.db", future=True)
+engine = create_engine("sqlite:///./app.db", future=True, connect_args={"check_same_thread": False})
 
-def set_sqlite_pragma(dbapi_connection, connection_record):
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, conn_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
