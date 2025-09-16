@@ -62,7 +62,7 @@ def test_user_reminders_happy_path(client):
     # 4) Log an event for 'now' → should remove it from due list
     r = client.post("/events", json={
         "habit_id": habit_id,
-        "occurred_at_utc": now_iso,
+        "occurred_at": now_iso,
     })
     assert r.status_code in (200, 201), r.text
 

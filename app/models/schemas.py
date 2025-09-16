@@ -1,19 +1,30 @@
+# app/models/schemas.py
 from __future__ import annotations
-from pydantic import BaseModel, EmailStr, field_validator
-from pydantic import ConfigDict, Field  # pydantic v2 style config
+from pydantic import BaseModel, Field, ConfigDict, EmailStr, field_validator, AliasChoices
 from typing import Optional, Any, Dict
 from datetime import datetime, date, timezone
 from uuid import UUID
 from enum import Enum
 from zoneinfo import ZoneInfo
 
+# ---------- Enums ----------
+class Difficulty(str, Enum):
+    easy = "easy"
+    medium = "medium"
+    hard = "hard"
 
+class HabitStatus(str, Enum):
+    active = "active"
+    paused = "paused"
+    archived = "archived"
 
-class Streak(BaseModel):
-    current: int
-    max: int
-    last_completed: date | None
+class ContextKind(str, Enum):
+    travel = "travel"
+    exam = "exam"
+    illness = "illness"
+    custom = "custom"
 
+# ---------- User ----------
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
@@ -27,26 +38,9 @@ class User(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-# app/models/enums.py
-from enum import Enum  # Python's Enum
-
-class Difficulty(str, Enum):
-    easy = "easy"
-    medium = "medium"
-    hard = "hard"
-
-class HabitStatus(str, Enum):
-    active = "active"
-    paused = "paused"
-    archived = "archived"
-
-
-
-
-# You can keep Context kind as free text for now; add an Enum later if helpful.
-
+# ---------- Habit ----------
 class HabitCreate(BaseModel):
-    user_id: UUID | None = None 
+    user_id: UUID | None = None
     name: str
     difficulty: Difficulty = Difficulty.medium
     status: HabitStatus = HabitStatus.active
@@ -54,8 +48,10 @@ class HabitCreate(BaseModel):
     start_date: Optional[date] = None
 
 class HabitRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    # v2 style only; remove any class Config elsewhere
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     id: int
+    user_id: UUID            # <-- NOTE the colon, not equals
     name: str
     difficulty: Difficulty
     status: HabitStatus
@@ -76,18 +72,18 @@ class HabitPatch(BaseModel):
         except Exception:
             raise ValueError("Invalid IANA timezone string")
         return v
-    
-class ContextKind(str, Enum):
-    travel = "travel"
-    exam = "exam"
-    illness = "illness"
-    custom = "custom"
 
-# ---------- Event Schemas ----------
+# ---------- Streak ----------
+class Streak(BaseModel):
+    current: int
+    max: int
+    last_completed: Optional[date]
+
+# ---------- Events ----------
 class EventCreate(BaseModel):
-    # was UUID — make it int to match your Habit/Event PKs in tests/DB
+    # Accept either 'occurred_at_utc' (tests/reminders) OR 'occurred_at' (your other tests)
+    occurred_at: datetime = Field(validation_alias=AliasChoices("occurred_at_utc", "occurred_at"))
     habit_id: int
-    occurred_at: datetime
 
     @field_validator("occurred_at")
     @classmethod
@@ -96,7 +92,6 @@ class EventCreate(BaseModel):
             return v.replace(tzinfo=timezone.utc)
         return v.astimezone(timezone.utc)
 
-
 class EventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     id: int
@@ -104,12 +99,12 @@ class EventRead(BaseModel):
     occurred_at: datetime = Field(alias="occurred_at_utc")
     created_at: datetime
 
-# ---------- Context Schemas ----------
+# ---------- Context ----------
 class ContextCreate(BaseModel):
     kind: str
     start: datetime
     end: Optional[datetime] = None
-    data: Dict[str, Any] = Field(default_factory=dict)   # rename from metadata
+    data: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("start", "end")
     @classmethod
@@ -117,19 +112,18 @@ class ContextCreate(BaseModel):
         if v is None:
             return v
         return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
-    
+
 class ContextRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-
-    id: int                                # ← ORM uses int PK
+    id: int
     kind: ContextKind
     start: datetime = Field(alias="start_utc")
     end: Optional[datetime] = Field(alias="end_utc")
-    data: Dict[str, Any] = Field(default_factory=dict)   # renamed   # ← if your ORM column is called "data"
+    data: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
+# ---------- Reminders ----------
 class ReminderDue(BaseModel):
     habit_id: int
     habit_name: str
-

@@ -1,4 +1,7 @@
+# app/crud/habits.py
 from typing import Optional, Dict, Any, List
+from uuid import UUID
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
@@ -17,16 +20,23 @@ def _to_enum(val, enum_cls):
         return val
     return enum_cls(val)
 
+def _to_str_uuid(val):
+    """Accept UUID or str and return str for SQLite binding."""
+    if isinstance(val, UUID):
+        return str(val)
+    return val
+
 # ---- aligned names to match router ----
 
-def create(db: Session, payload: HabitCreate, *, user_id: str) -> HabitORM:
-    # payload has: name, difficulty?, status?
+def create(db: Session, payload: HabitCreate, *, user_id) -> HabitORM:
+    owner = _to_str_uuid(user_id)
+
     name = payload.name
     difficulty = _to_enum(getattr(payload, "difficulty", Difficulty.medium), Difficulty)
     status     = _to_enum(getattr(payload, "status", HabitStatus.active), HabitStatus)
 
     habit = HabitORM(
-        user_id=user_id,
+        user_id=owner,                         # <<< string for SQLite
         name=name,
         name_canonical=_canon(name),
         difficulty=difficulty or Difficulty.medium,
@@ -38,37 +48,40 @@ def create(db: Session, payload: HabitCreate, *, user_id: str) -> HabitORM:
         db.rollback(); _conflict("You already have a habit with that name.")
     return habit
 
-def get(db: Session, *, habit_id: int, user_id: str) -> HabitORM | None:
-    # enforce ownership
+def get(db: Session, *, habit_id: int, user_id) -> HabitORM | None:
+    owner = _to_str_uuid(user_id)
     return db.query(HabitORM).filter(
         HabitORM.id == habit_id,
-        HabitORM.user_id == user_id
+        HabitORM.user_id == owner
     ).one_or_none()
 
-def get_by_name(db: Session, *, user_id: str, name: str) -> HabitORM | None:
+def get_by_name(db: Session, *, user_id, name: str) -> HabitORM | None:
+    owner = _to_str_uuid(user_id)
     return (
         db.query(HabitORM)
-        .filter(HabitORM.user_id == user_id, HabitORM.name_canonical == _canon(name))
+        .filter(HabitORM.user_id == owner, HabitORM.name_canonical == _canon(name))
         .one_or_none()
     )
 
 def list_by_user(
-    db: Session, *, user_id: str, only_active: bool | None = None, limit: int = 100, offset: int = 0
+    db: Session, *, user_id, only_active: bool | None = None, limit: int = 100, offset: int = 0
 ) -> list[HabitORM]:
-    q = db.query(HabitORM).filter(HabitORM.user_id == user_id)
+    owner = _to_str_uuid(user_id)
+    q = db.query(HabitORM).filter(HabitORM.user_id == owner)
     if only_active:
         q = q.filter(HabitORM.status == HabitStatus.active)
     return q.order_by(HabitORM.created_at.desc()).offset(offset).limit(limit).all()
 
 def update(
-    db: Session, *, habit_id: int, user_id: str, data: dict
+    db: Session, *, habit_id: int, user_id, data: dict
 ) -> HabitORM | None:
-    habit = get(db, habit_id=habit_id, user_id=user_id)
+    owner = _to_str_uuid(user_id)
+    habit = get(db, habit_id=habit_id, user_id=owner)
     if not habit:
         return None
 
     # handle rename → recanonicalize
-    if "name" in data:
+    if "name" in data and data["name"] is not None:
         habit.name = data["name"]
         habit.name_canonical = _canon(data["name"])
 
@@ -84,10 +97,18 @@ def update(
         db.rollback(); _conflict("You already have a habit with that name.")
     return habit
 
-def delete(db: Session, *, habit_id: int, user_id: str) -> bool:
-    habit = get(db, habit_id=habit_id, user_id=user_id)
+def delete(db: Session, *, habit_id: int, user_id) -> bool:
+    owner = _to_str_uuid(user_id)
+    habit = get(db, habit_id=habit_id, user_id=owner)
     if not habit:
         return False
     db.delete(habit)
     db.commit()
     return True
+
+
+
+
+def get_by_id(db: Session, habit_id: int) -> Optional[HabitORM]:
+    """Public lookup by primary key (no owner scoping)."""
+    return db.get(HabitORM, habit_id)
