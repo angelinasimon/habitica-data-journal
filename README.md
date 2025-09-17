@@ -84,3 +84,42 @@ The goal is to log habits, analyze streaks and trends, and eventually add smart 
     - Synced Pydantic `Streak` schema with API responses.
   - Achieved **100% passing tests** across `tests/test_app.py`, `test_habits_api.py`, `test_events_api.py`, `test_contexts_api.py`, and `test_integration_flow.py`.
 "
+
+
+### Day 7 — September 11–16, 2025  
+- **Reminders service**  
+  - Implemented `app/services/reminders.py::run_reminder_cycle` to find habits due today and surface them for notifications.  
+  - Added full test coverage for reminder logic, including active contexts and paused habits.  
+
+- **Scheduler integration**  
+  - Created `app/services/scheduler.py` with APScheduler background jobs.  
+  - Configured interval trigger (default 15 min) with safe DB session handling and logging.  
+  - Later extended to support **CRON-based scheduling** (`REMINDER_CRON` in `.env`) and proper timezone handling via `tzdata`.  
+  - Guarded against double-starts with `app.state.scheduler`.  
+  - Added shutdown logic for clean process exit.  
+
+- **Configuration system**  
+  - Added `app/core/settings.py` using `pydantic-settings`.  
+  - Reads `.env` for:
+    - `REMINDER_CRON` or `REMINDER_INTERVAL_MINUTES`
+    - `TIMEZONE`  
+    - `TESTING` (disables scheduler in pytest)  
+    - `DISABLE_SCHEDULER` (manual override)  
+  - Confirmed environment-driven scheduling works (e.g., `*/1 * * * *` for every minute in dev).  
+
+- **Main app lifecycle**  
+  - Updated `app/main.py` to use FastAPI `lifespan` for unified startup/shutdown:  
+    - Starts scheduler once at app startup.  
+    - Shuts down cleanly at app stop.  
+    - Still creates tables on startup.  
+  - Verified no duplicate scheduler instances during hot reload.  
+
+- **Verification**  
+  - Manual smoke test with `.env REMINDER_CRON="*/1 * * * *"` showed reminder job firing every minute.  
+  - Logs confirmed due-item counts update correctly.  
+  - Added pytest guard (`TESTING=1`) to ensure no scheduler runs during tests.  
+  - New unit tests:
+    - Scheduler guard check (ensures no job starts if TESTING=1).  
+    - Direct reminder-cycle test with live DB session.  
+
+---
