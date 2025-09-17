@@ -1,0 +1,11 @@
+# tests/test_scheduler_guard.py
+from fastapi import FastAPI
+from app.services.scheduler import start_scheduler
+
+def test_scheduler_does_not_start_when_testing_env(monkeypatch):
+    # simulate TESTING=1 (pydantic-settings already read .env, so override at runtime)
+    monkeypatch.setenv("TESTING", "1")
+
+    app = FastAPI()
+    start_scheduler(app)
+    assert getattr(app.state, "scheduler", None) is None

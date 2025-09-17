@@ -1,10 +1,10 @@
-# app/services/scheduler.py
-import os
 import logging
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("scheduler")
 
@@ -25,32 +25,50 @@ def _reminder_job():
 
 def _create_scheduler() -> BackgroundScheduler:
     """
-    One scheduler per process. We run in UTC and convert to each user's local
-    day when computing what's due.
+    One scheduler per process.
+    If REMINDER_CRON is set, use it. Otherwise fall back to REMINDER_INTERVAL_MINUTES.
     """
-    job_defaults = {
-        "coalesce": True,      # if we missed a run (server slept), run once
-        "max_instances": 1     # no overlapping reminder jobs
-    }
-    sched = BackgroundScheduler(timezone="UTC", job_defaults=job_defaults)
+    from app.core.settings import settings
 
-    # Dev default: run every 15 minutes; prod: set REMINDER_INTERVAL_MINUTES=60
-    minutes = int(os.getenv("REMINDER_INTERVAL_MINUTES", "15"))
-    sched.add_job(
-        _reminder_job,
-        trigger=IntervalTrigger(minutes=minutes),
-        id="reminders:interval",
-        replace_existing=True,
-        misfire_grace_time=60,
-    )
+    job_defaults = {
+        "coalesce": True,   # collapse missed runs into one
+        "max_instances": 1  # no overlapping jobs
+    }
+
+    tz = ZoneInfo(settings.TIMEZONE)
+    sched = BackgroundScheduler(timezone=tz, job_defaults=job_defaults)
+
+    if settings.REMINDER_CRON:  # prefer CRON when provided
+        trigger = CronTrigger.from_crontab(settings.REMINDER_CRON, timezone=tz)
+        sched.add_job(
+            _reminder_job,
+            trigger=trigger,
+            id="reminders:cron",
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+        logger.info("Scheduler configured with CRON=%s TZ=%s", settings.REMINDER_CRON, settings.TIMEZONE)
+    else:
+        minutes = int(settings.REMINDER_INTERVAL_MINUTES)
+        sched.add_job(
+            _reminder_job,
+            trigger=IntervalTrigger(minutes=minutes),
+            id="reminders:interval",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        logger.info("Scheduler configured with interval=%s min TZ=%s", minutes, settings.TIMEZONE)
+
     return sched
 
 def start_scheduler(app) -> None:
     """
-    Start once per worker. Safe in dev if you set DISABLE_SCHEDULER=1 for pytest.
+    Start once per worker. Safe in dev. Respects TESTING/DISABLE_SCHEDULER.
     """
-    if os.getenv("DISABLE_SCHEDULER", "0") == "1":
-        logger.info("Scheduler disabled by env (DISABLE_SCHEDULER=1)")
+    from app.core.settings import settings
+
+    if settings.DISABLE_SCHEDULER or settings.TESTING:
+        logger.info("Scheduler disabled (DISABLE_SCHEDULER=%s, TESTING=%s)", settings.DISABLE_SCHEDULER, settings.TESTING)
         return
     if getattr(app.state, "scheduler", None):
         logger.info("Scheduler already present on app.state; skipping")
