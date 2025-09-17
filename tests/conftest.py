@@ -57,15 +57,17 @@ def db_session():
         db.close()
 
 # --- FastAPI client using the test DB via dependency override ---
-@pytest.fixture
-def client(db_session):
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
+# tests/conftest.py (or the specific test file)
 
-    app.dependency_overrides[get_db] = override_get_db
+def _fake_user():
+    class U: id = "test-user-123"
+    return U()
+
+@pytest.fixture
+def client():
+    # override just for tests
+    from app.auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: _fake_user()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

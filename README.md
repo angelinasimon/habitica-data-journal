@@ -122,4 +122,17 @@ The goal is to log habits, analyze streaks and trends, and eventually add smart 
     - Scheduler guard check (ensures no job starts if TESTING=1).  
     - Direct reminder-cycle test with live DB session.  
 
----
+### Day 8 — September 17, 2025
+-  Created `app/services/analytics.py` with service stubs
+-  Added `app/routers/analytics.py` and registered endpoints:
+  - `GET /analytics/weekly`
+  - `GET /analytics/heatmap`
+  - `GET /analytics/slips`
+-  Implemented first real query: **`weekly_completion`**
+  - Timezone-aware, Monday-based weekly bucketing
+  - Dedupes events per (habit, day)
+  - Returns completion % for each week in window
+-  Wrote test (`tests/test_analytics.py`) to:
+  - Create user + habit
+  - Log events across two weeks
+  - Call `/analytics/weekly` and assert correct percentages

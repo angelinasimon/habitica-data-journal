@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.routers import users, habits, events, context, admin
+from app.routers import users, habits, events, context, admin, analytics
 from app.auth import router as auth_router
 from contextlib import asynccontextmanager
 from app.db import Base, engine
@@ -33,6 +33,7 @@ app.include_router(habits.router)
 app.include_router(events.router)
 app.include_router(context.router)
 app.include_router(auth_router)
+app.include_router(analytics.router)
 
 @app.get("/ping")
 def ping():
