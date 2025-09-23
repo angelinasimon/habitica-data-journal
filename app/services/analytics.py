@@ -50,6 +50,7 @@ def _ensure_aware(dt: datetime) -> datetime:
 
 # ---------- analytics ----------
 
+
 def weekly_completion(
     user_id: str | int,
     start: Optional[date] = None,
@@ -131,31 +132,138 @@ def weekly_completion(
         return results
 
 
-def habit_heatmap(user_id: str | int, start: Optional[date] = None, end: Optional[date] = None) -> Dict[str, Any]:
+def habit_heatmap(
+    user_id: str | int,
+    start: Optional[date] = None,
+    end: Optional[date] = None
+) -> Dict[str, Any]:
     """
-    Stub: return a date->count mapping suitable for a calendar heatmap.
+    Group events into day-of-week × time-bucket counts.
+    Useful for building a heatmap visualization (what times you succeed most).
     """
-    return {
-        "user_id": str(user_id),
-        "window": {"start": start.isoformat() if start else None, "end": end.isoformat() if end else None},
-        "dates": {
-            "2025-09-10": 2,
-            "2025-09-11": 1,
-            "2025-09-12": 0,
-            "2025-09-13": 3,
-        },
-        "status": "stub"
-    }
+    with Session(engine) as session:
+        tz = _user_tz(session, user_id)
+
+        # Default window = last 30 days
+        if start is None or end is None:
+            today_local = datetime.now(timezone.utc).astimezone(tz).date()
+            start = today_local - timedelta(days=30)
+            end = today_local
+
+        start_utc = _to_utc_bounds(start, tz, end_of_day=False)
+        end_utc = _to_utc_bounds(end, tz, end_of_day=True)
+
+        rows = session.execute(
+            select(EventORM.occurred_at_utc)
+            .join(HabitORM, EventORM.habit_id == HabitORM.id)
+            .where(HabitORM.user_id == user_id)
+            .where(EventORM.occurred_at_utc >= start_utc)
+            .where(EventORM.occurred_at_utc <= end_utc)
+        ).scalars().all()
+
+        # Buckets
+        dow_keys = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        buckets = ["morning", "afternoon", "evening"]
+        counts = {d: {b: 0 for b in buckets} for d in dow_keys}
+
+        def bucket_for_hour(h: int) -> str:
+            if 5 <= h <= 11:
+                return "morning"
+            if 12 <= h <= 17:
+                return "afternoon"
+            return "evening"
+
+        total = 0
+        for ts in rows:
+            ts = _ensure_aware(ts).astimezone(tz)
+            dow = dow_keys[ts.weekday()]
+            b = bucket_for_hour(ts.hour)
+            counts[dow][b] += 1
+            total += 1
+
+        percent_of_dow = {}
+        for d in dow_keys:
+            day_total = sum(counts[d].values())
+            percent_of_dow[d] = {
+                b: (counts[d][b] / day_total if day_total else 0.0)
+                for b in buckets
+            }
+
+        return {
+            "user_id": str(user_id),
+            "window": {"start": start.isoformat(), "end": end.isoformat()},
+            "counts": counts,
+            "percent_of_dow": percent_of_dow,  # <-- added to satisfy test
+            "total_events": total,
+        }
 
 
-def slip_detector(user_id: str | int) -> Dict[str, Any]:
-    """
-    Stub: highlight habits with recent missed streaks or downward trends.
-    """
-    return {
-        "user_id": str(user_id),
-        "slips": [
-            {"habit_id": "stub-2", "name": "Read", "misses_in_last_7_days": 4, "note": "Falling behind vs. last week"},
-        ],
-        "status": "stub"
-    }
+def slip_detector(
+    user_id: str | int,
+    window_7_days: int = 7,
+    window_30_days: int = 30,
+    slip_threshold: float = 0.15,
+) -> Dict[str, Any]:
+    with Session(engine) as session:
+        tz = _user_tz(session, user_id)
+        now = datetime.now(timezone.utc)
+        w7_start = now - timedelta(days=window_7_days)
+        w30_start = now - timedelta(days=window_30_days)
+
+        # active habits
+        if HabitStatus is not None and hasattr(HabitStatus, "ACTIVE"):
+            habits = session.execute(
+                select(HabitORM).where(
+                    HabitORM.user_id == user_id,
+                    HabitORM.status == HabitStatus.ACTIVE
+                )
+            ).scalars().all()
+        else:
+            habits = session.execute(
+                select(HabitORM).where(HabitORM.user_id == user_id)
+            ).scalars().all()
+
+        if not habits:
+            return {"user_id": str(user_id), "slipping": []}
+
+        habit_map = {h.id: h for h in habits}
+
+        # events in last 30 days, joined to habits to filter by user_id
+        events = session.execute(
+            select(EventORM.habit_id, EventORM.occurred_at_utc)
+            .join(HabitORM, EventORM.habit_id == HabitORM.id)
+            .where(HabitORM.user_id == user_id)
+            .where(EventORM.occurred_at_utc >= w30_start)
+            .where(EventORM.occurred_at_utc <= now)
+        ).all()
+
+        grouped: dict[str, list[datetime]] = {}
+        for hid, ts in events:
+            if hid in habit_map:
+                grouped.setdefault(hid, []).append(_ensure_aware(ts))
+
+        slipping = []
+        for hid, ts_list in grouped.items():
+            local_ts = [ts.astimezone(tz) for ts in ts_list]
+
+            def distinct_days(since: datetime) -> int:
+                return len({ts.date() for ts in local_ts if ts >= since.astimezone(tz)})
+
+            days_7 = distinct_days(w7_start)
+            days_30 = distinct_days(w30_start)
+
+            pct_7 = days_7 / window_7_days
+            pct_30 = days_30 / window_30_days
+            delta = pct_7 - pct_30
+
+            if (pct_30 - pct_7) >= slip_threshold:
+                slipping.append({
+                    "habit_id": hid,  # keep native type (int)
+                    "name": habit_map[hid].name,
+                    "pct_7d": round(pct_7, 3),
+                    "pct_30d": round(pct_30, 3),
+                    "delta": round(delta, 3),
+                })
+
+        slipping.sort(key=lambda r: r["delta"])
+        return {"user_id": str(user_id), "slipping": slipping}

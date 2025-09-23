@@ -136,3 +136,9 @@ The goal is to log habits, analyze streaks and trends, and eventually add smart 
   - Create user + habit
   - Log events across two weeks
   - Call `/analytics/weekly` and assert correct percentages
+
+  ### Day 9 — September 18–22, 2025  
+- Implemented `habit_heatmap` and `slip_detector` services with endpoints.  
+- Normalized event creation to always store UTC and handle user-local times.  
+- Wrote tests for heatmap buckets and slip detection, fixed schema/status casing.  
+- Verified analytics now return correct structures and percentages.  

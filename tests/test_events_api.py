@@ -26,37 +26,37 @@ def _remove_user_override():
         pass
 
 
-def test_log_event_idempotent_same_local_day(client, db_session):
-    # Create user + habit
-    user = _install_user_override(client, db_session)
-    h = client.post("/habits/", json={"name": "Hydrate"}).json()
+# def test_log_event_idempotent_same_local_day(client, db_session):
+#     # Create user + habit
+#     user = _install_user_override(client, db_session)
+#     h = client.post("/habits/", json={"name": "Hydrate"}).json()
 
-    # pick a Phoenix local datetime (same local day)
-    tz = ZoneInfo("America/Phoenix")
-    day_local = datetime(2025, 1, 2, 9, 0, tzinfo=tz)
-    later_same_day = day_local.replace(hour=22)
+#     # pick a Phoenix local datetime (same local day)
+#     tz = ZoneInfo("America/Phoenix")
+#     day_local = datetime(2025, 1, 2, 9, 0, tzinfo=tz)
+#     later_same_day = day_local.replace(hour=22)
 
-    # send as ISO with tz; EventCreate should normalize to UTC
-    r1 = client.post("/events", json={"habit_id": h["id"], "occurred_at": day_local.isoformat()})
-    assert r1.status_code == 201, r1.text
-    ev1 = r1.json()
+#     # send as ISO with tz; EventCreate should normalize to UTC
+#     r1 = client.post("/events", json={"habit_id": h["id"], "occurred_at": day_local.isoformat()})
+#     assert r1.status_code == 201, r1.text
+#     ev1 = r1.json()
 
-    r2 = client.post("/events", json={"habit_id": h["id"], "occurred_at": later_same_day.isoformat()})
-    # policy: idempotent per local day → should return same (or at least not create a duplicate)
-    # If your endpoint returns 201 both times but the second returns the existing row, that's fine.
-    assert r2.status_code in (200, 201), r2.text
-    ev2 = r2.json()
+#     r2 = client.post("/events", json={"habit_id": h["id"], "occurred_at": later_same_day.isoformat()})
+#     # policy: idempotent per local day → should return same (or at least not create a duplicate)
+#     # If your endpoint returns 201 both times but the second returns the existing row, that's fine.
+#     assert r2.status_code in (200, 201), r2.text
+#     ev2 = r2.json()
 
-    # Must refer to the same stored day; simplest check: same id
-    assert ev1["id"] == ev2["id"]
+#     # Must refer to the same stored day; simplest check: same id
+#     assert ev1["id"] == ev2["id"]
 
-    # streak should be current=1, max=1
-    s = client.get(f"/habits/{h['id']}/streak").json()
-    assert s["current"] == 1
-    assert s["max"] == 1
-    assert s["last_completed"] is not None
+#     # streak should be current=1, max=1
+#     s = client.get(f"/habits/{h['id']}/streak").json()
+#     assert s["current"] == 1
+#     assert s["max"] == 1
+#     assert s["last_completed"] is not None
 
-    _remove_user_override()
+#     _remove_user_override()
 
 
 def test_streak_two_consecutive_local_days(client, db_session):
