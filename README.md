@@ -166,3 +166,20 @@ The goal is to log habits, analyze streaks and trends, and eventually add smart 
 - **Docs**  
   - Updated README to reflect feature groundwork, new endpoint, and test coverage.  
 
+### Day 11 — September 24, 2025
+
+- **Extended Feature Service:**  
+  Added hour-bucket parsing and a rolling slip flag (`slip_7d_flag`) to `build_daily_features`.  
+  Each row now captures median completion hour, contextual flags, and whether the habit is “slipping” after three missed days.
+
+- **Expanded `/analytics/features` Endpoint:**  
+  Introduced optional `user_id` query parameter for multi-user analysis.  
+  Endpoint now outputs enriched feature rows (streaks, last-7d/30d completion rates, median completion bucket, and context).
+
+- **Testing Improvements:**  
+  Added coverage for:
+  - Multiple habits per user (ensures one row per habit/day)  
+  - No-event edge case (verifies zero/default values)  
+  - Slip flag toggling after three consecutive misses  
+
+All analytics tests now pass ✅

@@ -135,14 +135,27 @@ class ContextFlags(BaseModel):
     exam: bool
     illness: bool
 
-class FeatureRowOut(BaseModel):
+
+Dow = Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+class FeatureContext(BaseModel):
+    travel: bool
+    exam: bool
+    illness: bool
+
+# public response row (use this in response_model)
+class FeaturePublic(BaseModel):
     habit_id: int
     habit_name: str
-    day: date  # local day for the user when the row applies
-    dow: Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    last_7d_completion_rate: float = Field(ge=0, le=1)
-    last_30d_completion_rate: float = Field(ge=0, le=1)
-    current_streak: int = Field(ge=0)
-    median_completion_bucket: Literal["morning", "afternoon", "evening", "night"]
-    context: ContextFlags
+    day: date
+    dow: Dow
+    last_7d_completion_rate: float
+    last_30d_completion_rate: float
+    current_streak: int
+    hour_bucket: Optional[str] = None
+    difficulty: str = "medium"
+    active: bool = True
+    median_completion_bucket: Optional[str] = None
+    context: FeatureContext
     slip: bool
+

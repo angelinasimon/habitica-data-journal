@@ -10,11 +10,11 @@ from sqlalchemy.orm import Session                              # NEW
 from app.auth import get_current_user
 from app.services.analytics import weekly_completion, habit_heatmap, slip_detector
 from app.services.features import build_daily_features                # NEW
-from app.models.schemas import FeatureRowOut                 # NEW
-from app.db import get_db                                      # NEW  (adjust path if yours differs)
+from app.models.schemas import FeaturePublic           # NEW
+from app.db import get_db, HabitORM                                     # NEW  (adjust path if yours differs)
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
-
+DOW3 = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
 def _user_id_from(current_user: Any) -> str:
     """Extract a user id from model/namespace/dict without assuming type."""
@@ -29,7 +29,7 @@ def _user_id_from(current_user: Any) -> str:
 
 @router.get(
     "/features",
-    response_model=List[FeatureRowOut],
+    response_model=List[FeaturePublic],
     summary="Per-day habit feature rows",
 )
 def get_features(
@@ -42,44 +42,52 @@ def get_features(
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
 ):
-    """
-    Returns per-day feature rows for each habit between `start` and `end` (inclusive).
-    If `user_id` is omitted, the current authenticated user's id is used.
-
-    **Example response (single row):**
-    ```json
-    [
-      {
-        "habit_id": 42,
-        "habit_name": "Study",
-        "day": "2025-09-29",
-        "dow": "Mon",
-        "last_7d_completion_rate": 0.57,
-        "last_30d_completion_rate": 0.73,
-        "current_streak": 4,
-        "median_completion_bucket": "evening",
-        "context": {"travel": false, "exam": true, "illness": false},
-        "slip": true
-      }
-    ]
-    ```
-    """
     if start > end:
         raise HTTPException(status_code=400, detail="`start` must be <= `end`")
 
     effective_user_id = user_id or _user_id_from(current_user)
 
+    # Build internal rows (dataclasses)
     rows = build_daily_features(
         db=db,
+        user_id=effective_user_id,
         start=start,
         end=end,
-        user_id=effective_user_id,
     )
 
-    # Normalize dataclass -> dict for the response model
-    normalized = [asdict(r) if is_dataclass(r) else r for r in rows]
-    return normalized
+    if not rows:
+        return []
 
+    # Fetch habit names once
+    habit_ids = {r.habit_id for r in rows}
+    name_rows = (
+        db.query(HabitORM.id, HabitORM.name)
+        .filter(HabitORM.id.in_(habit_ids))
+        .all()
+    )
+    habit_name_by_id = {hid: hname for hid, hname in name_rows}
+
+    # Map internal → public
+    out: List[FeaturePublic] = []
+    for r in rows:
+        out.append({
+            "habit_id": r.habit_id,
+            "habit_name": habit_name_by_id.get(r.habit_id, ""),
+            "day": r.day,  # Pydantic will serialize to "YYYY-MM-DD"
+            "dow": DOW3[r.dow],  # 0..6 -> "Mon".."Sun"
+            "last_7d_completion_rate": r.last_7d_rate,
+            "last_30d_completion_rate": r.last_30d_rate,
+            "current_streak": r.current_streak,
+            "median_completion_bucket": r.hour_bucket,
+            "context": {
+                "travel": r.is_travel,
+                "exam": r.is_exam,
+                "illness": r.is_illness,
+            },
+            "slip": r.slip_7d_flag,
+        })
+
+    return out
 
 # ---------------- Existing endpoints (unchanged) -----------
 
@@ -128,77 +136,3 @@ def get_slipping(
     user_id = _user_id_from(current_user)
     return slip_detector(user_id, window_7_days=w7, window_30_days=w30, slip_threshold=threshold)
 
-@router.get(
-    "/features",
-    summary="Per-day habit feature rows",
-)
-def get_features(
-    start: date = Query(..., description="Inclusive start date (YYYY-MM-DD, local to user)"),
-    end: date = Query(..., description="Inclusive end date (YYYY-MM-DD, local to user)"),
-    user_id: Optional[str] = Query(
-        None,
-        description="Optional user UUID; defaults to current user if omitted."
-    ),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-):
-    """
-    Returns one row per (habit, day) between `start` and `end` (inclusive).
-    If `user_id` is omitted, the authenticated user's id is used.
-
-    **Example response (single row):**
-    ```json
-    [
-      {
-        "user_id": "c7c2e3d0-1234-4b8a-b111-222233334444",
-        "habit_id": 42,
-        "day": "2025-09-29",
-        "last_7d_completion_rate": 0.57,
-        "last_30d_completion_rate": 0.73,
-        "current_streak": 4,
-        "dow": "Mon",
-        "median_completion_bucket": "evening",
-        "difficulty": "medium",
-        "active": true,
-        "context": {"travel": false, "exam": true, "illness": false},
-        "slip": true
-      }
-    ]
-    ```
-    """
-    if start > end:
-        raise HTTPException(status_code=400, detail="`start` must be <= `end`")
-
-    effective_user_id = user_id or _user_id_from(current_user)
-
-    rows = build_daily_features(
-        db=db,
-        user_id=effective_user_id,
-        start=start,
-        end=end,
-    )
-
-    # dataclass -> dict and rename fields for API friendliness
-    out: List[dict] = []
-    for r in rows:
-        d = asdict(r) if is_dataclass(r) else dict(r)
-        out.append({
-            "user_id": d["user_id"],
-            "habit_id": d["habit_id"],
-            "day": d["day"].isoformat() if hasattr(d["day"], "isoformat") else d["day"],
-            "last_7d_completion_rate": d["last_7d_rate"],
-            "last_30d_completion_rate": d["last_30d_rate"],
-            "current_streak": d["current_streak"],
-            "dow": DOW3[d["dow"]] if isinstance(d["dow"], int) and 0 <= d["dow"] <= 6 else d["dow"],
-            "median_completion_bucket": d["hour_bucket"],   # could be None
-            "difficulty": d["difficulty"],                  # "easy"/"medium"/"hard" or None
-            "active": d["active"],
-            "context": {
-                "travel": d["is_travel"],
-                "exam": d["is_exam"],
-                "illness": d["is_illness"],
-            },
-            "slip": d["slip_7d_flag"],
-        })
-
-    return out

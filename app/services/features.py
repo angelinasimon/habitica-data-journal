@@ -174,64 +174,58 @@ def build_daily_features(
     rows: List[FeatureRow] = []
 
     for h in habits:
-        # rolling windows per habit
         win7: deque[int] = deque([], maxlen=7)
         win30: deque[int] = deque([], maxlen=30)
         current_streak = 0
-        miss_streak = 0  # for slip flag (3 consecutive misses)
 
         mhour = median_hour_by_habit[h.id]
         hbkt = hour_to_bucket(mhour, buckets) if mhour is not None else None
 
-        # IMPORTANT: we must also walk through backfill days to seed the windows,
-        # but only emit rows for [start..end].
-        for d in _daterange(backfill_start, end):
+        # 1) Warm-up: seed windows & current_streak ONLY
+        for d in _daterange(backfill_start, start - timedelta(days=1)):
+            completed = 1 if per_day_completed.get((h.id, d), False) else 0
+            win7.append(completed)
+            win30.append(completed)
+            # keep streak historically so day-1 streak is correct
+            current_streak = current_streak + 1 if completed else 0
+
+        # Reset miss streak at the start of the requested window
+        miss_streak = 0
+
+        # 2) Emit rows for [start..end]
+        for d in _daterange(start, end):
             completed = 1 if per_day_completed.get((h.id, d), False) else 0
 
-            # roll windows
             win7.append(completed)
             win30.append(completed)
             last7 = sum(win7) / len(win7)
             last30 = sum(win30) / len(win30)
 
-            # seed streak/miss_streak during warm-up
-            if d < start:
-                current_streak = current_streak + 1 if completed else 0
-                miss_streak = 0 if completed else (miss_streak + 1)
-                continue
-
-            # now we are within [start..end]
             current_streak = current_streak + 1 if completed else 0
             miss_streak = 0 if completed else (miss_streak + 1)
             slip_flag = miss_streak >= 3
 
             flags = context_flags_by_day[d]
-
-            # derive booleans/strings from enums (no direct enum import needed)
-            status_val = getattr(h, "status", None)
-            status_str = str(getattr(status_val, "value", status_val) or "").lower()
+            status_str = str(getattr(getattr(h, "status", None), "value", getattr(h, "status", None)) or "").lower()
             active_val = status_str == "active"
-
             diff_val = getattr(h, "difficulty", None)
             difficulty_str = str(getattr(diff_val, "value", diff_val)) if diff_val is not None else None
 
-            rows.append(
-                FeatureRow(
-                    user_id=user_id,
-                    habit_id=h.id,
-                    day=d,
-                    last_7d_rate=round(last7, 4),
-                    last_30d_rate=round(last30, 4),
-                    current_streak=current_streak,
-                    dow=d.weekday(),
-                    hour_bucket=hbkt,
-                    difficulty=difficulty_str,
-                    active=active_val,
-                    is_travel=flags["travel"],
-                    is_exam=flags["exam"],
-                    is_illness=flags["illness"],
-                    slip_7d_flag=slip_flag,
-                )
-            )
+            rows.append(FeatureRow(
+                user_id=user_id,
+                habit_id=h.id,
+                day=d,
+                last_7d_rate=round(last7, 4),
+                last_30d_rate=round(last30, 4),
+                current_streak=current_streak,
+                dow=d.weekday(),
+                hour_bucket=hbkt,
+                difficulty=difficulty_str,
+                active=active_val,
+                is_travel=flags["travel"],
+                is_exam=flags["exam"],
+                is_illness=flags["illness"],
+                slip_7d_flag=slip_flag,
+            ))
 
     return rows

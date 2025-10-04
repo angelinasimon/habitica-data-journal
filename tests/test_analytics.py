@@ -2,7 +2,7 @@
 import os
 from types import SimpleNamespace
 from uuid import uuid4
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import pytest
 
 from fastapi.testclient import TestClient
@@ -194,3 +194,172 @@ def test_slips_flags_recent_drop_real(client, db_session):
     assert me["pct_30d"] >= me["pct_7d"]
 
     _clear_auth_override()
+
+def test_features_multiple_habits_two_rows_per_day(client):
+    """
+    Two habits for one user, both completed on the same day.
+    Expect 2 rows (one per habit) for that day.
+    """
+    # user
+    r = client.post("/users", json={
+        "email": f"multi+{uuid4().hex[:8]}@example.com",
+        "name": "Multi Habit User",
+        "timezone": "America/Phoenix",
+    })
+    assert r.status_code in (200, 201), r.text
+    user = r.json()
+    user_id = user["id"]
+
+    # override auth → this user
+    from app.auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=user_id)
+
+    # habits
+    r = client.post("/habits/", json={"user_id": user_id, "name": "H1", "status": "active"})
+    assert r.status_code in (200, 201), r.text
+    h1 = r.json()["id"]
+
+    r = client.post("/habits/", json={"user_id": user_id, "name": "H2", "status": "active"})
+    assert r.status_code in (200, 201), r.text
+    h2 = r.json()["id"]
+
+    # same-day events for both
+    day = "2025-09-10"
+    for hid in (h1, h2):
+        rr = client.post("/events/", json={
+            "habit_id": hid,
+            "occurred_at": f"{day}T10:00:00Z"
+        })
+        assert rr.status_code in (200, 201), rr.text
+
+    # call features (single-day window -> should return 2 rows)
+    r = client.get("/analytics/features", params={"start": day, "end": day})
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert len(rows) == 2
+
+    habit_ids = {row["habit_id"] for row in rows}
+    assert habit_ids == {h1, h2}
+    for row in rows:
+        assert row["day"] == day
+        # On the day we completed, these should be positive
+        assert row["current_streak"] >= 1
+        assert 0.0 <= row["last_7d_completion_rate"] <= 1.0
+        assert 0.0 <= row["last_30d_completion_rate"] <= 1.0
+
+def test_features_no_events_single_day_defaults(client):
+    """
+    No events for the day → defaults:
+      - last_7d / last_30d = 0.0
+      - current_streak = 0
+      - median_completion_bucket = None
+      - context flags false
+      - slip = False (only one miss day in-window)
+    """
+    r = client.post("/users", json={
+        "email": f"noev+{uuid4().hex[:8]}@example.com",
+        "name": "No Events User",
+        "timezone": "America/Phoenix",
+    })
+    assert r.status_code in (200, 201), r.text
+    user = r.json()
+    user_id = user["id"]
+
+    from app.auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=user_id)
+
+    # one active habit but no events
+    r = client.post("/habits/", json={"user_id": user_id, "name": "Empty", "status": "active"})
+    assert r.status_code in (200, 201), r.text
+    habit_id = r.json()["id"]
+
+    day = "2025-09-15"
+    r = client.get("/analytics/features", params={"start": day, "end": day})
+    assert r.status_code == 200, r.text
+    rows = r.json()
+
+    # one row for the habit/day
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["habit_id"] == habit_id
+    assert row["day"] == day
+
+    assert row["last_7d_completion_rate"] == 0.0
+    assert row["last_30d_completion_rate"] == 0.0
+    assert row["current_streak"] == 0
+    assert row["median_completion_bucket"] is None
+    assert row["context"] == {"travel": False, "exam": False, "illness": False}
+    assert row["slip"] is False
+
+def test_features_slip_flag_toggles_on_three_misses_then_resets(client):
+    """
+    Build a sequence over 5 days:
+      D1: complete
+      D2: miss
+      D3: miss
+      D4: miss  -> slip True
+      D5: complete -> slip False (reset)
+    Assert slip progression [False, False, True, False] across D2..D5 rows.
+    """
+    r = client.post("/users", json={
+        "email": f"slip+{uuid4().hex[:8]}@example.com",
+        "name": "Slip Toggle User",
+        "timezone": "America/Phoenix",
+    })
+    assert r.status_code in (200, 201), r.text
+    user = r.json()
+    user_id = user["id"]
+
+    from app.auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=user_id)
+
+    r = client.post("/habits/", json={"user_id": user_id, "name": "Read", "status": "active"})
+    assert r.status_code in (200, 201), r.text
+    habit_id = r.json()["id"]
+
+    # Define a 5-day window
+    start_day = date(2025, 9, 1)
+    days = [start_day + timedelta(days=i) for i in range(5)]
+
+    # D1 complete only
+    r = client.post("/events/", json={
+        "habit_id": habit_id,
+        "occurred_at": f"{days[0].isoformat()}T18:00:00Z"
+    })
+    assert r.status_code in (200, 201), r.text
+
+    # D5 complete to reset slip after 3 misses
+    # (We’ll post this after we fetch once to verify the True day too)
+    # Actually post it now; evaluation is per-row within the window
+    r = client.post("/events/", json={
+        "habit_id": habit_id,
+        "occurred_at": f"{days[4].isoformat()}T18:00:00Z"
+    })
+    assert r.status_code in (200, 201), r.text
+
+    # Query full window
+    r = client.get("/analytics/features", params={
+        "start": days[0].isoformat(),
+        "end":   days[-1].isoformat(),
+    })
+    assert r.status_code == 200, r.text
+    rows = [row for row in r.json() if row["habit_id"] == habit_id]
+    assert len(rows) == 5
+
+    # Map by day for clarity
+    by_day = {row["day"]: row for row in rows}
+    d1, d2, d3, d4, d5 = [by_day[d.isoformat()] for d in days]
+
+    # Sanity: D1 and D5 completed → current_streak >= 1 those days
+    assert d1["current_streak"] >= 1
+    assert d5["current_streak"] >= 1
+
+    # Slip progression across misses:
+    # D2 miss -> miss_streak=1 -> slip False
+    # D3 miss -> miss_streak=2 -> slip False
+    # D4 miss -> miss_streak=3 -> slip True
+    # D5 complete -> resets -> slip False
+    assert d2["slip"] is False
+    assert d3["slip"] is False
+    assert d4["slip"] is True
+    assert d5["slip"] is False
