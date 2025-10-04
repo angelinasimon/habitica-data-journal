@@ -6,6 +6,8 @@ from datetime import datetime, date, timezone
 from uuid import UUID
 from enum import Enum
 from zoneinfo import ZoneInfo
+from typing import Literal
+
 
 # ---------- Enums ----------
 class Difficulty(str, Enum):
@@ -127,3 +129,20 @@ class ContextRead(BaseModel):
 class ReminderDue(BaseModel):
     habit_id: int
     habit_name: str
+
+class ContextFlags(BaseModel):
+    travel: bool
+    exam: bool
+    illness: bool
+
+class FeatureRowOut(BaseModel):
+    habit_id: int
+    habit_name: str
+    day: date  # local day for the user when the row applies
+    dow: Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    last_7d_completion_rate: float = Field(ge=0, le=1)
+    last_30d_completion_rate: float = Field(ge=0, le=1)
+    current_streak: int = Field(ge=0)
+    median_completion_bucket: Literal["morning", "afternoon", "evening", "night"]
+    context: ContextFlags
+    slip: bool

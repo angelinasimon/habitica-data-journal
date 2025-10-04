@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     # Optional kill switch
     DISABLE_SCHEDULER: bool = False
 
+    # Analytics / Feature Engineering
+    # Define "hour buckets" for habits. Format: name=startHour-endHour, comma-separated.
+    # Wrap-around supported (e.g., "night=22-5").
+    TIME_BUCKETS: str = "morning=5-11,afternoon=11-17,evening=17-22,night=22-5"
+
     # Pydantic v2 config
     model_config = SettingsConfigDict(
         env_file=".env",

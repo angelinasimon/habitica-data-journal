@@ -142,3 +142,27 @@ The goal is to log habits, analyze streaks and trends, and eventually add smart 
 - Normalized event creation to always store UTC and handle user-local times.  
 - Wrote tests for heatmap buckets and slip detection, fixed schema/status casing.  
 - Verified analytics now return correct structures and percentages.  
+
+### Day 10 — September 23, 2025  
+
+- **Feature groundwork**  
+  - Created `app/services/features.py` with `build_daily_features(user_id, start, end)` to generate one row per (habit, day).  
+  - Engineered fields included:  
+    - last_7d and last_30d completion rates  
+    - current streak length (linked to streak service)  
+    - categorical fields: day-of-week and hour bucket  
+    - difficulty, active status, and context flags  
+  - Query-driven design ensures scalability for future ML models.  
+
+- **API exposure**  
+  - Added `/analytics/features?start=&end=` endpoint to return raw feature rows (dev-only).  
+  - Documented response shape in docstrings and README with example row.  
+
+- **Testing**  
+  - Extended `tests/test_analytics.py` to seed events over multiple weeks.  
+  - Verified correctness of rolling completion rates, streak length, and categorical fields.  
+  - Confirmed tests pass with expected outputs.  
+
+- **Docs**  
+  - Updated README to reflect feature groundwork, new endpoint, and test coverage.  
+
